@@ -1,8 +1,10 @@
 import type { HostMessage, RendererName, WebviewMessage } from '../protocol';
 import { parseBlocksXml as parse } from './parse';
 import { serializeWorkspace } from './serialize';
+import { preserveUnknownFields, registerArcadeBlocks } from './arcade/register';
+import { createArcadeTheme } from './arcade/theme';
+import { buildArcadeToolbox } from './arcade/toolbox';
 import { defineStubsFor } from './stubBlocks';
-import { TOOLBOX_XML } from './toolbox';
 
 /** Matches `blocksEditor.writeDebounceMs`; the host re-sends it on `init`. */
 const DEFAULT_DEBOUNCE_MS = 200;
@@ -53,7 +55,10 @@ function loadXml(xml: string): void {
     return;
   }
 
+  // Order matters: stub anything Arcade does not define, then make sure no
+  // field in the document is dropped by whatever ends up drawing the block.
   const stubbed = defineStubsFor(dom);
+  const preserved = preserveUnknownFields(dom);
 
   applyingRemote = true;
   try {
@@ -69,19 +74,33 @@ function loadXml(xml: string): void {
     applyingRemote = false;
   }
 
-  showStatus(describeStubs(stubbed));
+  showStatus(describeStubs(stubbed, preserved));
 }
 
-function describeStubs(stubbed: string[]): string | undefined {
-  if (stubbed.length === 0) {
-    return undefined;
+function describeStubs(stubbed: string[], preserved: string[]): string | undefined {
+  const notes: string[] = [];
+
+  if (stubbed.length > 0) {
+    const shown = stubbed.slice(0, 5).join(', ');
+    const rest = stubbed.length > 5 ? `, and ${stubbed.length - 5} more` : '';
+    notes.push(
+      stubbed.length === 1
+        ? `1 block type is not part of the Arcade library and is shown as a placeholder: ${shown}.`
+        : `${stubbed.length} block types are not part of the Arcade library and are shown as ` +
+            `placeholders: ${shown}${rest}.`
+    );
   }
-  const shown = stubbed.slice(0, 5).join(', ');
-  const rest = stubbed.length > 5 ? `, and ${stubbed.length - 5} more` : '';
-  return stubbed.length === 1
-    ? `1 block type is not known to this editor and is shown as a placeholder: ${shown}.`
-    : `${stubbed.length} block types are not known to this editor and are shown as ` +
-        `placeholders: ${shown}${rest}.`;
+
+  if (preserved.length > 0) {
+    notes.push(
+      `${preserved.length} field${preserved.length === 1 ? '' : 's'} this editor does not ` +
+        `model ${preserved.length === 1 ? 'is' : 'are'} shown as plain text so ${
+          preserved.length === 1 ? 'it survives' : 'they survive'
+        } saving.`
+    );
+  }
+
+  return notes.length > 0 ? notes.join(' ') : undefined;
 }
 
 function restoreLastLoaded(): void {
@@ -175,13 +194,16 @@ function safeSerialize(): string | undefined {
 }
 
 function boot(renderer: RendererName, mediaUri: string, editable: boolean): void {
+  registerArcadeBlocks();
+
   workspace = Blockly.inject('blockly', {
-    toolbox: Blockly.utils.xml.textToDom(TOOLBOX_XML),
+    toolbox: buildArcadeToolbox(),
+    theme: createArcadeTheme(),
     renderer,
     media: mediaUri,
     readOnly: !editable,
     trashcan: true,
-    zoom: { controls: true, wheel: true, startScale: 0.9, minScale: 0.3, maxScale: 3 },
+    zoom: { controls: true, wheel: true, startScale: 0.8, minScale: 0.2, maxScale: 3 },
     move: { scrollbars: true, drag: true, wheel: true },
     grid: { spacing: 24, length: 3, colour: 'rgba(128,128,128,0.25)', snap: true },
   });

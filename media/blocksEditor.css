@@ -40,6 +40,51 @@ body:has(.status:not([hidden])) #blockly {
   border-bottom: 1px solid var(--vscode-inputValidation-warningBorder, #7a6a1f);
 }
 
+/* MakeCode refers to its toolbox category icons by codepoint in this font. */
+@font-face {
+  font-family: 'MakeCode Icons';
+  src: url('fonts/makecode-icons.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
+.arcade-cat-icon {
+  font-family: 'MakeCode Icons' !important;
+  font-style: normal;
+  font-weight: normal;
+  display: inline-block;
+  width: 1.4em;
+  margin-right: 0.45em;
+  text-align: center;
+  /* The glyphs are designed at a larger optical size than the label text. */
+  font-size: 1.15em;
+  line-height: 1;
+  vertical-align: -0.1em;
+}
+
+/* MakeCode's toolbox rows are taller and roomier than Blockly's default, and
+   lay the icon out beside the label rather than on top of it. */
+.blocklyToolboxCategory {
+  padding: 0.35rem 0.6rem;
+}
+
+.blocklyTreeRowContentContainer {
+  display: flex;
+  align-items: center;
+  gap: 0.1em;
+}
+
+.blocklyToolboxDiv {
+  min-width: 9.5rem;
+}
+
+.arcade-cat-label {
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+}
+
 /* Blockly draws its own chrome; keep the canvas transparent so the VS Code
    theme's editor background shows through in both light and dark themes. */
 .blocklyMainBackground {

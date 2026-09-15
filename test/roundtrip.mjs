@@ -19,7 +19,7 @@ const { outputFiles } = await build({
   bundle: true,
   write: false,
   format: 'iife',
-  globalName: 'Stubs',
+  globalName: 'H',
   platform: 'browser',
   target: 'es2022',
 });
@@ -38,19 +38,28 @@ const samples = (await readdir(sampleDir)).filter((name) => name.endsWith('.bloc
 assert.ok(samples.length > 0, 'expected at least one sample .blocks file');
 
 let failures = 0;
+/** Serialized output per sample, for the fidelity checks further down. */
+const serializedBySample = new Map();
 
 for (const name of samples) {
   const original = await readFile(join(sampleDir, name), 'utf8');
   const result = await page.evaluate((xml) => {
-    const dom = Stubs.parseBlocksXml(xml);
-    const stubbed = Stubs.defineStubsFor(dom);
+    // Register the Arcade library first, exactly as the editor does — otherwise
+    // every Arcade block would fall back to a placeholder and this would be
+    // testing the stub mechanism rather than the block library.
+    H.registerArcadeBlocks();
+    const dom = H.parseBlocksXml(xml);
+    const stubbed = H.defineStubsFor(dom);
+    const preserved = H.preserveUnknownFields(dom);
     const workspace = Blockly.inject('blockly', { renderer: 'zelos' });
     Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
-    const out = Stubs.serializeWorkspace(workspace);
+    const out = H.serializeWorkspace(workspace);
     const blockCount = workspace.getAllBlocks(false).length;
     workspace.dispose();
-    return { out, stubbed, blockCount };
+    return { out, stubbed, preserved, blockCount };
   }, original);
+
+  serializedBySample.set(name, result.out);
 
   const before = shape(original);
   const after = shape(result.out);
@@ -58,15 +67,57 @@ for (const name of samples) {
   try {
     assert.ok(result.blockCount > 0, 'workspace loaded no blocks');
     assert.deepEqual(after, before, 'serialized structure differs from the source file');
+    // A sample named arcade-* must be covered by the generated Arcade library:
+    // if any of its blocks fell back to a placeholder, the library has a hole.
+    if (name.startsWith('arcade-')) {
+      assert.deepEqual(
+        result.stubbed,
+        [],
+        'Arcade blocks fell back to placeholders instead of real definitions'
+      );
+    }
     console.log(
       `PASS ${name} — ${result.blockCount} blocks` +
-        (result.stubbed.length ? `, stubbed: ${result.stubbed.join(', ')}` : '')
+        (result.stubbed.length ? `, stubbed: ${result.stubbed.join(', ')}` : '') +
+        (result.preserved.length ? `, preserved fields: ${result.preserved.join(', ')}` : '')
     );
   } catch (error) {
     failures++;
     console.error(`FAIL ${name}: ${error.message}`);
     console.error('  expected:', JSON.stringify(before));
     console.error('  actual  :', JSON.stringify(after));
+  }
+}
+
+// Details the structural comparison above deliberately ignores (it normalizes
+// away ids, whitespace and attribute order) but which still must not be lost.
+// These patterns come from a file saved by MakeCode Arcade itself.
+const FIDELITY = {
+  'arcade-real.blocks': [
+    ['sprite kind field', /<field name="MEMBER">Player<\/field>/],
+    ['user-defined kinds', /<variable type="KIND_SpriteKind"[^>]*>Enemy<\/variable>/],
+    ['pixel-art image literal', /3 3 3 3 3 3 3/],
+    ['block <data> payload', /<data>\{"commentRefs"/],
+    ['expandable-block mutation', /_expanded="0"/],
+    ['speed field editor value', /<field name="speed">100<\/field>/],
+    ['variable id with punctuation', /EAxh@b_I_0=rzSxew0,2/],
+  ],
+};
+
+for (const [sample, patterns] of Object.entries(FIDELITY)) {
+  const serialized = serializedBySample.get(sample);
+  if (!serialized) {
+    failures++;
+    console.error(`FAIL ${sample} was not round-tripped, so fidelity was not checked`);
+    continue;
+  }
+  for (const [label, pattern] of patterns) {
+    if (pattern.test(serialized)) {
+      console.log(`PASS keeps ${label}`);
+    } else {
+      failures++;
+      console.error(`FAIL lost ${label} from ${sample}`);
+    }
   }
 }
 
@@ -84,7 +135,7 @@ const malformed = [
 for (const [label, text] of malformed) {
   const rejected = await page.evaluate((xml) => {
     try {
-      Stubs.parseBlocksXml(xml);
+      H.parseBlocksXml(xml);
       return false;
     } catch {
       return true;
@@ -101,7 +152,7 @@ for (const [label, text] of malformed) {
 // An empty file is a legitimate starting point, not a parse error.
 const emptyOk = await page.evaluate(() => {
   try {
-    return Stubs.parseBlocksXml('   ').tagName.toLowerCase() === 'xml';
+    return H.parseBlocksXml('   ').tagName.toLowerCase() === 'xml';
   } catch {
     return false;
   }

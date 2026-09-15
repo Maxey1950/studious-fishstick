@@ -1,7 +1,7 @@
 # Blocks Editor (`.blocks`)
 
-A **web extension** for VS Code that opens `.blocks` files (Blockly / MakeCode XML)
-in a visual block canvas — and co-edits over **Live Share**.
+A **web extension** for VS Code that opens MakeCode Arcade `.blocks` files in a
+real Arcade block canvas — and co-edits over **Live Share**.
 
 Runs in [vscode.dev](https://vscode.dev) and github.dev, as well as desktop VS Code.
 
@@ -67,24 +67,71 @@ Three things make that smooth rather than janky:
 - Live Share must be installed by each participant **in desktop VS Code** to host
   a session. Browser participants can join a session in vscode.dev.
 
-## MakeCode files
+## MakeCode Arcade support
 
-MakeCode `.blocks` files reference block types defined by the MakeCode target
-(`device_forever`, `basic_show_leds`, …) that stock Blockly does not know.
+The editor ships Arcade's actual block library: **493 blocks and 69 dropdowns
+across 15 categories**, generated from MakeCode Arcade's own compiled API
+metadata, with Arcade's real colours, icons, groups, tooltips and reference
+links. `sprite of kind`, `on game update`, `move with buttons`, `destroy with
+effect`, tilemaps, music — they look and read the way they do in Arcade.
 
-Rather than failing to load — or worse, loading partially and then writing the
-damage back to disk — unknown types get a **generated placeholder block** whose
-shape is inferred from how the file uses it: its fields, value inputs, statement
-inputs, and whether it reports a value (`src/webview/stubBlocks.ts`). Any
-`<mutation>` element is stored verbatim and re-emitted.
+How it is built (`scripts/generateArcadeBlocks.mjs`):
 
-The result is that a MakeCode file **round-trips unchanged** even though this
-editor does not ship MakeCode's block library. That claim is enforced by
-`npm test`, which loads each file in `sample/` into real Blockly in real
-Chromium and asserts the serialized structure matches the source.
+- pxt has already parsed each block's layout into `attributes._def`, so the
+  generator translates that structure instead of re-parsing TypeScript.
+- The toolbox is limited to the packages a new Arcade project actually depends
+  on, resolved from `blocksprj`'s dependency closure. Optional extensions
+  (corgio, darts, radio, esp32…) stay *defined* — a project using them still
+  loads — but are not offered, because Arcade does not offer them either until
+  you add the extension.
+- Categories carry MakeCode's own icon codepoints, drawn from a bundled
+  Font Awesome 4 (see `media/fonts/LICENSE.md` for why not pxt's own font file).
+- Built-in categories use MakeCode's palette verbatim from the target bundle:
+  loops `#20BF6B`, logic `#45AAF2`, math `#A55EEA`, variables `#EC3B59`,
+  text `#F5D547`, arrays `#FF8F08`, functions `#1446A0`.
 
-This extension does not attempt to *be* MakeCode. It will not render MakeCode's
-block artwork or offer its toolbox.
+Refresh the library against the current Arcade release with `npm run
+arcade:refresh`; the generated output is committed so ordinary builds need no
+network access.
+
+### What is faithful, and what is not
+
+Verified against a file saved by MakeCode Arcade itself (`sample/arcade-real.blocks`),
+which round-trips byte-for-byte in structure — sprite kinds, pixel-art image
+literals, `<data>` payloads, expandable-block `<mutation>`s and all:
+
+- Sprite kinds are workspace variables (`<variable type="KIND_SpriteKind">`) and
+  the dropdown reads its options from them, so the kinds a game defines for
+  itself (`SpriteKind.Coin`) appear and survive saving.
+- Blocks are drawn with the `zelos` renderer, closest to MakeCode's own.
+
+Not reproduced:
+
+- **Custom field editors.** MakeCode's image painter, tilemap editor, colour
+  swatches and speed sliders are bespoke UI. Their values are shown as plain
+  editable text or numbers — a sprite image reads as its `img\`...\`` literal
+  rather than a grid of pixels. Nothing is lost; it is just not a painter.
+- **The "+" expand toggle.** Blocks with optional arguments are drawn fully
+  expanded. Omitting those inputs would drop values a file already stores for
+  them, so they are always shown.
+- **No simulator.** This edits games; it does not run them.
+
+### Nothing gets dropped
+
+Blockly silently discards fields and mutations a block does not declare, which
+on save would delete part of someone's game. Two passes prevent that, and they
+do not depend on this editor's guesses being right:
+
+- Any `<field>` the definition does not declare is added to the block as a text
+  field before loading, so it survives.
+- Any `<mutation>` a block does not understand is stored verbatim and written
+  back unchanged.
+- Block types Arcade does not define at all still render, as placeholder blocks
+  shaped from how the file uses them (`src/webview/stubBlocks.ts`).
+
+`npm test` enforces this: it loads every sample into real Blockly in real
+Chromium, asserts the serialized structure matches the source, and asserts that
+Arcade files use no placeholders at all.
 
 ## Development
 
@@ -116,6 +163,13 @@ npx vscode-test-web --extensionDevelopmentPath=. ./sample
 | `src/webview/main.ts` | Blockly injection, change handling, debounce, drag queueing. |
 | `src/webview/serialize.ts` | Workspace → `.blocks` XML. |
 | `src/webview/stubBlocks.ts` | Placeholder definitions for unknown block types. |
+| `src/webview/arcade/register.ts` | Registers the Arcade library; preserves unknown fields and mutations. |
+| `src/webview/arcade/dropdowns.ts` | Enum and sprite-kind dropdowns, extensible per document. |
+| `src/webview/arcade/toolbox.ts` | Arcade toolbox, merged with MakeCode's built-in categories. |
+| `src/webview/arcade/coreBlocks.ts` | `on start` and pxt's loop/math/variable blocks. |
+| `src/webview/arcade/theme.ts` | MakeCode's palette as a Blockly theme. |
+| `scripts/fetchArcade.mjs` | Downloads the Arcade target bundle. |
+| `scripts/generateArcadeBlocks.mjs` | Turns its API metadata into block definitions. |
 | `scripts/vendor.mjs` | Copies Blockly out of `node_modules` into `media/vendor/`. |
 
 Blockly is **vendored, not loaded from a CDN** — vscode.dev's webview content
@@ -145,5 +199,12 @@ extension reads and writes exclusively through `vscode.workspace` APIs.
 
 ## License
 
-MIT. Blockly is vendored under its own Apache-2.0 license, included at
-`media/vendor/blockly/LICENSE`.
+MIT.
+
+- **Blockly** is vendored under its own Apache-2.0 license, included at
+  `media/vendor/blockly/LICENSE`.
+- **Font Awesome 4.7** supplies the category icons, under SIL OFL 1.1 — see
+  `media/fonts/LICENSE.md`.
+- The generated block definitions are derived from **MakeCode Arcade**'s
+  published target metadata (MIT, Copyright (c) Microsoft Corporation). This
+  project is not affiliated with or endorsed by Microsoft.

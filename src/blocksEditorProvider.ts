@@ -178,6 +178,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
       `default-src 'none'`,
       `img-src ${webview.cspSource} data: blob:`,
       `media-src ${webview.cspSource}`,
+      // Blockly preloads its click and disconnect sounds with fetch(), which is
+      // governed by connect-src rather than media-src.
+      `connect-src ${webview.cspSource}`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource}`,
       `script-src 'nonce-${nonce}'`,

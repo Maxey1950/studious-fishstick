@@ -10,13 +10,20 @@
 export function serializeWorkspace(workspace: any): string {
   const dom = Blockly.Xml.workspaceToDom(workspace);
 
-  // Blockly 13's `workspaceToDom` emits blocks only — variable declarations
-  // moved to its JSON serializer. Writing that back would silently delete the
-  // `<variables>` section every MakeCode file carries, so re-attach it here, as
-  // the first child, where MakeCode expects it.
+  // Blockly 13 emits `<variables>` only for variables some block references, and
+  // omits the section entirely when none do — which would silently delete the
+  // declarations a MakeCode file carries for variables it has not used yet.
+  // Replace whatever it produced with the workspace's complete list, in the
+  // leading position MakeCode expects.
   const variables = allVariables(workspace);
   if (variables.length > 0) {
-    dom.insertBefore(Blockly.Xml.variablesToDom(variables), dom.firstChild);
+    const complete = Blockly.Xml.variablesToDom(variables);
+    const existing = dom.querySelector('variables');
+    if (existing) {
+      dom.replaceChild(complete, existing);
+    } else {
+      dom.insertBefore(complete, dom.firstChild);
+    }
   }
 
   return `${Blockly.Xml.domToPrettyText(dom)}\n`;

@@ -5,3 +5,4 @@
 export { defineStubsFor } from '../src/webview/stubBlocks';
 export { serializeWorkspace } from '../src/webview/serialize';
 export { parseBlocksXml } from '../src/webview/parse';
+export { registerArcadeBlocks, preserveUnknownFields } from '../src/webview/arcade/register';

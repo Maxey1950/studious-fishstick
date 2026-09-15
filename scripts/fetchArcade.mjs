@@ -3,7 +3,7 @@
  * metadata for every Arcade block, and caches it for the generator.
  *
  * Run this only to refresh the block library (`npm run arcade:refresh`). Normal
- * builds use the generated output committed under media/generated, so the build
+ * builds use the generated output committed under src/generated, so the build
  * needs no network access.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
