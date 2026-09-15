@@ -1,0 +1,51 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+#blockly {
+  position: absolute;
+  inset: 0;
+}
+
+/* Pushed down when the status banner is visible. */
+body:has(.status:not([hidden])) #blockly {
+  top: 2.2rem;
+}
+
+.status {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  height: 2.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--vscode-inputValidation-warningBackground, #352a05);
+  color: var(--vscode-inputValidation-warningForeground, inherit);
+  border-bottom: 1px solid var(--vscode-inputValidation-warningBorder, #7a6a1f);
+}
+
+/* Blockly draws its own chrome; keep the canvas transparent so the VS Code
+   theme's editor background shows through in both light and dark themes. */
+.blocklyMainBackground {
+  stroke: none;
+}
+
+.injectionDiv {
+  background: transparent;
+}

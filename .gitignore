@@ -1,0 +1,7 @@
+node_modules/
+dist/
+media/vendor/
+media/blocksEditor.js
+media/blocksEditor.js.map
+*.vsix
+.vscode-test-web/
