@@ -100,7 +100,8 @@
     "package": "npm run vendor && node esbuild.mjs --production",
     "typecheck": "tsc --noEmit",
     "open-in-browser": "npm run compile && vscode-test-web --browserType=chromium --extensionDevelopmentPath=. ./sample",
-    "test": "npm run compile && node test/roundtrip.mjs"
+    "test": "npm run compile && node test/roundtrip.mjs",
+    "arcade:refresh": "node scripts/fetchArcade.mjs && node scripts/generateArcadeBlocks.mjs"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",

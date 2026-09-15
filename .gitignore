@@ -5,3 +5,6 @@ media/blocksEditor.js
 media/blocksEditor.js.map
 *.vsix
 .vscode-test-web/
+
+# Upstream MakeCode Arcade bundle (8.7MB); refresh with `npm run arcade:refresh`.
+.arcade-cache/
