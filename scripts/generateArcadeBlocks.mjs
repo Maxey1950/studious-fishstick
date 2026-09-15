@@ -79,6 +79,7 @@ for (const block of [...blocks, ...extras]) {
 
 await writeFile(join(OUT, 'arcade-blocks.json'), JSON.stringify(deduped, null, 0));
 await writeFile(join(OUT, 'arcade-dropdowns.json'), JSON.stringify(dropdowns, null, 0));
+await writeFile(join(OUT, 'arcade-palette.json'), JSON.stringify(readPalette(target), null, 0));
 await writeFile(join(OUT, 'arcade-toolbox.json'), JSON.stringify(toolbox, null, 0));
 await writeFile(
   join(OUT, 'arcade-meta.json'),
@@ -105,6 +106,24 @@ console.log(`categories: ${toolbox.length}`);
 console.log(`skipped:    ${skipped.length}`);
 
 /** Namespaces carry the category colour, icon, ordering and group names. */
+/**
+ * Arcade's 16-colour palette, declared by the `device` package. Index 0 is the
+ * transparent slot; the rest are the colours the image editor offers.
+ */
+function readPalette(bundle) {
+  for (const files of Object.values(bundle.bundledpkgs ?? {})) {
+    try {
+      const palette = JSON.parse(files['pxt.json'] ?? '{}').palette;
+      if (Array.isArray(palette) && palette.length === 16) {
+        return palette;
+      }
+    } catch {
+      // A package without a readable pxt.json simply has no palette to offer.
+    }
+  }
+  throw new Error('no 16-colour palette found in the target bundle');
+}
+
 function resolveDefaultPackages(bundle) {
   const packages = bundle.bundledpkgs ?? {};
   const configOf = (name) => {
@@ -514,7 +533,14 @@ function isHandler(type) {
  * which can hold any value the file contains.
  */
 function fieldFor(name, editor, defaultValue) {
-  const numeric = ['speed', 'colornumber', 'colorindex', 'number', 'numberdropdown', 'timePicker'];
+  // The image painter is a real editor, not a stand-in.
+  if (editor === 'sprite') {
+    return { type: 'field_arcade_image', name, text: String(defaultValue ?? '') };
+  }
+  if (editor === 'colornumber' || editor === 'colorwheel') {
+    return { type: 'field_arcade_colour', name, text: String(defaultValue ?? '1') };
+  }
+  const numeric = ['speed', 'colorindex', 'number', 'numberdropdown', 'timePicker'];
   if (numeric.includes(editor)) {
     const parsed = Number(String(defaultValue ?? '').replace(/["']/g, ''));
     return { type: 'field_number', name, value: Number.isFinite(parsed) ? parsed : 0 };

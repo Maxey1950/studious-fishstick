@@ -94,3 +94,93 @@ body:has(.status:not([hidden])) #blockly {
 .injectionDiv {
   background: transparent;
 }
+
+/* ---- Arcade image painter ---------------------------------------------- */
+
+.arcade-painter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  max-width: min(90vw, 26rem);
+}
+
+.arcade-painter-canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  cursor: crosshair;
+  border-radius: 4px;
+  /* The canvas is drawn at cell resolution; keep the edges hard when it scales. */
+  image-rendering: pixelated;
+  touch-action: none;
+}
+
+.arcade-painter-palette {
+  /* Arcade's 16 colours, as two even rows of eight. */
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.25rem;
+  justify-items: stretch;
+}
+
+.arcade-colour-picker {
+  padding: 0.6rem;
+  max-width: 14rem;
+}
+
+.arcade-swatch {
+  width: 100%;
+  min-width: 1.4rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* The transparent slot reads as a checkerboard, never as black. */
+.arcade-swatch-transparent {
+  background-image:
+    linear-gradient(45deg, #bbb 25%, transparent 25%),
+    linear-gradient(-45deg, #bbb 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #bbb 75%),
+    linear-gradient(-45deg, transparent 75%, #bbb 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-color: #fff;
+}
+
+.arcade-swatch-selected {
+  border-color: var(--vscode-focusBorder, #0078d4);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 0 0 2px var(--vscode-focusBorder, #0078d4);
+}
+
+.arcade-painter-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.arcade-painter-size {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.arcade-painter-button {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground, #5f6a79);
+  color: var(--vscode-button-secondaryForeground, #fff);
+  cursor: pointer;
+  font: inherit;
+}
+
+.arcade-painter-button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, #4c5561);
+}

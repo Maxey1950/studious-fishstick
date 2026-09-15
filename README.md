@@ -105,12 +105,26 @@ literals, `<data>` payloads, expandable-block `<mutation>`s and all:
   itself (`SpriteKind.Coin`) appear and survive saving.
 - Blocks are drawn with the `zelos` renderer, closest to MakeCode's own.
 
+**The sprite image painter is implemented.** A sprite image renders as the
+artwork itself on the block, and clicking it opens a pixel editor with Arcade's
+16-colour palette (read from the target bundle, so it tracks upstream):
+
+- Click or drag to paint; right-click or hold shift to erase.
+- The transparent slot is drawn as a checkerboard, never as black.
+- One stroke is one undo step.
+- Edits are written back in MakeCode's exact `img\`...\`` layout, so a file this
+  editor saves opens in Arcade unchanged — and because the value travels through
+  the text document, **painting syncs over Live Share** like any other edit.
+
+An image that is never edited is written back byte for byte rather than
+reformatted. Palette colour parameters (`colornumber`, `colorwheel`) get a
+matching swatch picker.
+
 Not reproduced:
 
-- **Custom field editors.** MakeCode's image painter, tilemap editor, colour
-  swatches and speed sliders are bespoke UI. Their values are shown as plain
-  editable text or numbers — a sprite image reads as its `img\`...\`` literal
-  rather than a grid of pixels. Nothing is lost; it is just not a painter.
+- **The tilemap and tileset editors**, the melody/sound-effect editors, and the
+  grid pickers. Their values are shown as plain editable text or numbers, which
+  preserves them exactly but is not the bespoke UI MakeCode draws.
 - **The "+" expand toggle.** Blocks with optional arguments are drawn fully
   expanded. Omitting those inputs would drop values a file already stores for
   them, so they are always shown.
@@ -167,6 +181,10 @@ npx vscode-test-web --extensionDevelopmentPath=. ./sample
 | `src/webview/arcade/dropdowns.ts` | Enum and sprite-kind dropdowns, extensible per document. |
 | `src/webview/arcade/toolbox.ts` | Arcade toolbox, merged with MakeCode's built-in categories. |
 | `src/webview/arcade/coreBlocks.ts` | `on start` and pxt's loop/math/variable blocks. |
+| `src/webview/arcade/imageField.ts` | The sprite image painter (`field_arcade_image`). |
+| `src/webview/arcade/imageLiteral.ts` | Reads and writes MakeCode's `img` literal. |
+| `src/webview/arcade/imageRender.ts` | Draws sprites for the preview and painter. |
+| `src/webview/arcade/colourField.ts` | Palette colour swatch picker. |
 | `src/webview/arcade/theme.ts` | MakeCode's palette as a Blockly theme. |
 | `scripts/fetchArcade.mjs` | Downloads the Arcade target bundle. |
 | `scripts/generateArcadeBlocks.mjs` | Turns its API metadata into block definitions. |

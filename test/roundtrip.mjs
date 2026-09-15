@@ -121,6 +121,53 @@ for (const [sample, patterns] of Object.entries(FIDELITY)) {
   }
 }
 
+// The sprite image editor reads and writes MakeCode's `img` literal. Getting
+// this wrong would corrupt artwork, so the shapes it must handle are pinned.
+const imageCases = await page.evaluate(() => {
+  const results = [];
+  const sample = 'img`\n. . . .\n. 3 3 .\n. 3 f .\n. . . .\n`';
+
+  const parsed = H.parseImageLiteral(sample);
+  results.push(['parses size', parsed && parsed.width === 4 && parsed.height === 4]);
+  results.push(['maps . to transparent', parsed && parsed.pixels[0] === 0]);
+  results.push(['maps hex digits', parsed && parsed.pixels[5] === 3 && parsed.pixels[10] === 15]);
+
+  // Round-tripping through the formatter must be stable: format(parse(x)) has to
+  // parse back to the same pixels, or repeated edits would drift.
+  const reparsed = H.parseImageLiteral(H.formatImageLiteral(parsed));
+  results.push([
+    'format round-trips',
+    reparsed &&
+      reparsed.width === parsed.width &&
+      reparsed.height === parsed.height &&
+      reparsed.pixels.every((value, i) => value === parsed.pixels[i]),
+  ]);
+
+  // MakeCode's own layout: an `img` tag, one token per pixel each followed by a
+  // space, one row per line.
+  const formatted = H.formatImageLiteral(H.createImage(2, 2));
+  results.push(['emits MakeCode layout', formatted === 'img`\n. . \n. . \n`']);
+
+  // Anything that is not an image literal must be left alone rather than coerced.
+  results.push(['rejects non-image text', H.parseImageLiteral('hello') === undefined]);
+  results.push(['rejects empty literal', H.parseImageLiteral('img``') === undefined]);
+
+  // A ragged literal (short final row) should still parse rather than throw.
+  const ragged = H.parseImageLiteral('img`\n1 2 3\n4 5\n`');
+  results.push(['handles ragged rows', ragged && ragged.width === 3 && ragged.pixels[5] === 0]);
+
+  return results;
+});
+
+for (const [label, ok] of imageCases) {
+  if (ok) {
+    console.log(`PASS image literal ${label}`);
+  } else {
+    failures++;
+    console.error(`FAIL image literal ${label}`);
+  }
+}
+
 // A collaborator editing the file as text produces transiently malformed XML.
 // Parsing must reject it, because a lenient parse yields an almost-empty
 // workspace that would then be written back over their file.

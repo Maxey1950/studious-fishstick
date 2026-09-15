@@ -12,7 +12,9 @@
  */
 import arcadeBlocks from '../../generated/arcade-blocks.json';
 import { CORE_BLOCKS } from './coreBlocks';
+import { installColourField } from './colourField';
 import { absorbUnknownDropdownValues, registerArcadeDropdowns } from './dropdowns';
+import { installImageField } from './imageField';
 
 let registered = false;
 
@@ -20,6 +22,10 @@ export function registerArcadeBlocks(): number {
   if (registered) {
     return 0;
   }
+  // Custom fields must exist before any block definition referring to them.
+  installImageField();
+  installColourField();
+
   const definitions = [...(arcadeBlocks as unknown as Record<string, unknown>[]), ...CORE_BLOCKS];
   Blockly.defineBlocksWithJsonArray(definitions);
   const dropdowns = registerArcadeDropdowns();
