@@ -89,6 +89,19 @@
           ],
           "default": "zelos",
           "description": "Blockly renderer. 'zelos' most closely resembles MakeCode."
+        },
+        "blocksEditor.engine": {
+          "type": "string",
+          "enum": [
+            "makecode",
+            "blockly"
+          ],
+          "enumDescriptions": [
+            "Embed the real MakeCode Arcade editor. Every block, the image and tilemap editors and the simulator are the genuine ones. Requires access to arcade.makecode.com.",
+            "Use the built-in Blockly editor. Works with no network access, and merges simultaneous edits more finely, but does not include MakeCode\u2019s tilemap, melody or grid editors."
+          ],
+          "default": "makecode",
+          "description": "Which editor to draw .blocks files with."
         }
       }
     }

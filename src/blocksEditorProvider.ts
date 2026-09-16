@@ -40,7 +40,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
     };
-    webview.html = this.buildHtml(webview);
+    const engine = this.engineFor(document);
+    webview.html =
+      engine === 'makecode' ? this.buildMakeCodeHtml(webview) : this.buildBlocklyHtml(webview);
 
     /**
      * The last XML this webview handed us. When the resulting document change
@@ -73,6 +75,13 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
 
     disposables.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('blocksEditor.engine', document.uri)) {
+          // Switching engines replaces the webview contents wholesale.
+          void vscode.window.showInformationMessage(
+            'Blocks Editor: reopen this file to switch editors.'
+          );
+          return;
+        }
         if (event.affectsConfiguration('blocksEditor', document.uri)) {
           // The webview rebuilds its workspace if the renderer changed, and
           // otherwise just picks up the new settings.
@@ -162,7 +171,54 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     }
   }
 
-  private buildHtml(webview: vscode.Webview): string {
+  private engineFor(document: vscode.TextDocument): 'makecode' | 'blockly' {
+    return vscode.workspace
+      .getConfiguration('blocksEditor', document.uri)
+      .get<'makecode' | 'blockly'>('engine', 'makecode');
+  }
+
+  /**
+   * The MakeCode engine: a webview whose only content is an iframe of the real
+   * Arcade editor, plus the bridge that keeps it and the document in step.
+   */
+  private buildMakeCodeHtml(webview: vscode.Webview): string {
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'makecodeEditor.js')
+    );
+    const styleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'blocksEditor.css')
+    );
+    const nonce = createNonce();
+
+    // frame-src is the point of this policy: everything else stays shut, and
+    // only MakeCode's own editor may be framed.
+    const csp = [
+      `default-src 'none'`,
+      `frame-src https://arcade.makecode.com https://*.makecode.com`,
+      `img-src ${webview.cspSource} data:`,
+      `style-src ${webview.cspSource} 'unsafe-inline'`,
+      `font-src ${webview.cspSource}`,
+      `script-src 'nonce-${nonce}'`,
+    ].join('; ');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="${styleUri}" rel="stylesheet">
+<title>MakeCode Arcade</title>
+</head>
+<body class="makecode-engine">
+<div id="status" class="status" role="status" hidden></div>
+<iframe id="editor" title="MakeCode Arcade editor" allow="autoplay; fullscreen"></iframe>
+<script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+
+  private buildBlocklyHtml(webview: vscode.Webview): string {
     const asset = (...parts: string[]): vscode.Uri =>
       webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', ...parts));
 

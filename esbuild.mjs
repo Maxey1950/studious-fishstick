@@ -30,6 +30,15 @@ const ctxs = await Promise.all([
     platform: 'browser',
     target: 'es2022',
   }),
+  // The MakeCode engine: the real Arcade editor in an iframe.
+  context({
+    ...shared,
+    entryPoints: ['src/webview/makecode/main.ts'],
+    outfile: 'media/makecodeEditor.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2022',
+  }),
 ]);
 
 if (watch) {

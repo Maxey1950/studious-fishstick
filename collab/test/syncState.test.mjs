@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { outputFiles } = await build({
-  entryPoints: [join(here, '../src/syncState.ts')],
+  entryPoints: [join(here, '../../src/shared/syncState.ts')],
   bundle: true,
   write: false,
   format: 'esm',

@@ -184,3 +184,18 @@ body:has(.status:not([hidden])) #blockly {
 .arcade-painter-button:hover {
   background: var(--vscode-button-secondaryHoverBackground, #4c5561);
 }
+
+/* ---- MakeCode engine (the real Arcade editor, embedded) ----------------- */
+
+body.makecode-engine #editor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+body.makecode-engine:has(.status:not([hidden])) #editor {
+  top: 2.2rem;
+  height: calc(100% - 2.2rem);
+}

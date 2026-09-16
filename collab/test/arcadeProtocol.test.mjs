@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { outputFiles } = await build({
-  entryPoints: [join(here, '../src/arcadeProtocol.ts')],
+  entryPoints: [join(here, '../../src/shared/arcadeProtocol.ts')],
   bundle: true, write: false, format: 'esm', platform: 'neutral', target: 'es2022',
 });
 const dir = await mkdtemp(join(tmpdir(), 'arcade-protocol-'));
