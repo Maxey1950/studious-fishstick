@@ -98,7 +98,7 @@
           ],
           "enumDescriptions": [
             "Embed the real MakeCode Arcade editor. Every block, the image and tilemap editors and the simulator are the genuine ones. Requires access to arcade.makecode.com.",
-            "Use the built-in Blockly editor. Works with no network access, and merges simultaneous edits more finely, but does not include MakeCode\u2019s tilemap, melody or grid editors."
+            "Use the built-in Blockly editor. Works with no network access, and merges simultaneous edits more finely, but does not include MakeCode’s tilemap, melody or grid editors."
           ],
           "default": "makecode",
           "description": "Which editor to draw .blocks files with."
@@ -116,11 +116,13 @@
     "test": "npm run compile && node test/roundtrip.mjs",
     "arcade:refresh": "node scripts/fetchArcade.mjs && node scripts/generateArcadeBlocks.mjs",
     "probe:embed": "node probe/serve.mjs",
-    "test:collab": "node collab/test/syncState.test.mjs && node collab/test/arcadeProtocol.test.mjs"
+    "test:collab": "node collab/test/syncState.test.mjs && node collab/test/arcadeProtocol.test.mjs",
+    "vsix": "npm run compile && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
     "@vscode/test-web": "^0.0.81",
+    "@vscode/vsce": "^3.2.0",
     "blockly": "^13.3.0",
     "esbuild": "^0.25.0",
     "playwright": "^1.63.0",

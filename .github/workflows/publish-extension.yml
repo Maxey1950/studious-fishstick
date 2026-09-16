@@ -1,0 +1,64 @@
+# Publishes the extension to the VS Code Marketplace.
+#
+# Why a workflow rather than publishing from a laptop: the person who needs this
+# is on a school-managed device that blocks most of the internet, and their
+# unfiltered device is a phone. Running it here means the Marketplace token
+# lives in GitHub's secret store and never has to be handled anywhere else.
+#
+# Setup, once:
+#   1. Create a publisher at https://marketplace.visualstudio.com/manage
+#      Its id must match "publisher" in package.json.
+#   2. Create an Azure DevOps personal access token with Marketplace > Manage.
+#   3. Add it to this repository as the secret VSCE_PAT
+#      (Settings > Secrets and variables > Actions > New repository secret).
+#
+# Then run this workflow from the Actions tab. It also uploads the .vsix as a
+# build artifact, so a failed publish still leaves something installable.
+
+name: Publish extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Package only, do not publish'
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify before publishing
+        run: |
+          npm run typecheck
+          npm test
+          npm run test:collab
+
+      - name: Package
+        run: npx vsce package --no-dependencies --out blocks-editor.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blocks-editor-vsix
+          path: blocks-editor.vsix
+
+      - name: Publish to the Marketplace
+        if: ${{ inputs.dry_run == false }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "VSCE_PAT is not set — add it as a repository secret first." >&2
+            exit 1
+          fi
+          npx vsce publish --no-dependencies --packagePath blocks-editor.vsix
