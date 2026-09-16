@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MakeCode Arcade controller-embed probe</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; display: flex; height: 100vh; }
+  #left { width: 26rem; padding: 1rem; overflow: auto; border-right: 1px solid #ccc; }
+  #log { font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; }
+  .ok { color: #137333; font-weight: 600; }
+  .bad { color: #c5221f; font-weight: 600; }
+  iframe { flex: 1; border: 0; }
+  h1 { font-size: 1rem; }
+</style>
+<div id="left">
+  <h1>Arcade controller-embed probe</h1>
+  <p>Answers one question: can the real MakeCode Arcade editor be driven from a
+     host page, so a <code>.blocks</code> file can round-trip through it?</p>
+  <p><b>What to look for:</b></p>
+  <ol>
+    <li><span id="s1">…</span> editor loads in the iframe</li>
+    <li><span id="s2">…</span> editor asks the host for projects (<code>workspacesync</code>)</li>
+    <li><span id="s3">…</span> editor renders our blocks</li>
+    <li><span id="s4">…</span> editor pushes changes back (<code>workspacesave</code>)
+        — <b>move a block to trigger this</b></li>
+  </ol>
+  <p>If 4 turns green, the design works. Copy this log back.</p>
+  <div id="log"></div>
+</div>
+<iframe id="editor"
+  src="https://arcade.makecode.com/index.html?controller=1&ws=browser&nocookiebanner=1"></iframe>
+<script>
+const logEl = document.getElementById('log');
+const line = (text, cls) => {
+  const stamp = new Date().toISOString().slice(11, 19);
+  logEl.insertAdjacentHTML('beforeend',
+    `<div${cls ? ` class="${cls}"` : ''}>${stamp}  ${text.replace(/[<&]/g, c => c === '<' ? '&lt;' : '&amp;')}</div>`);
+};
+const mark = (id, ok) => {
+  const el = document.getElementById(id);
+  el.textContent = ok ? '✅' : '❌';
+  el.className = ok ? 'ok' : 'bad';
+};
+
+const BLOCKS = `<xml xmlns="https://developers.google.com/blockly/xml"><variables><variable id="v1">mySprite</variable><variable type="KIND_SpriteKind" id="k1">Player</variable></variables><block type="pxt-on-start" x="0" y="0"><statement name="HANDLER"><block type="variables_set"><field name="VAR" id="v1">mySprite</field><value name="VALUE"><block type="spritescreate"><value name="img"><shadow type="screen_image_picker"><field name="img">img\`
+. . . . . . . .
+. . . 3 3 . . .
+. . 3 3 3 3 . .
+. . . 3 3 . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+\`</field></shadow></value><value name="kind"><shadow type="spritekind"><field name="MEMBER">Player</field></shadow></value></block></value></block></statement></block></xml>`;
+
+const project = {
+  header: {
+    name: 'embed-probe', id: 'embedprobe', editor: 'blocksprj', pubId: '', pubCurrent: false,
+    target: 'arcade', recentUse: Date.now(), modificationTime: Date.now(), path: 'embed-probe',
+    cloudUserId: null, cloudCurrent: false, cloudVersion: null, cloudLastSyncTime: 0, isDeleted: false,
+  },
+  text: {
+    'main.blocks': BLOCKS,
+    'main.ts': ' ',
+    'pxt.json': JSON.stringify({
+      name: 'embed-probe', dependencies: { device: '*' },
+      files: ['main.blocks', 'main.ts'],
+    }),
+  },
+};
+
+const editor = document.getElementById('editor');
+editor.addEventListener('load', () => { mark('s1', true); line('iframe load event fired', 'ok'); });
+
+let sawSave = 0;
+window.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg || typeof msg !== 'object' || !msg.type) return;
+  line(`<- type=${msg.type} action=${msg.action ?? '(none)'}`);
+
+  if (msg.action === 'workspacesync') {
+    mark('s2', true);
+    editor.contentWindow.postMessage(
+      { type: 'pxthost', id: msg.id, success: true, projects: [project] }, '*');
+    line('-> answered workspacesync with 1 project', 'ok');
+  }
+
+  if (msg.action === 'workspaceloaded' || msg.action === 'editorcontentloaded') {
+    mark('s3', true);
+    line('editor reports content loaded', 'ok');
+  }
+
+  if (msg.action === 'workspacesave') {
+    sawSave++;
+    const blocks = msg.project?.text?.['main.blocks'] ?? '';
+    mark('s4', true);
+    line(`*** workspacesave #${sawSave}: main.blocks=${blocks.length} chars, ` +
+         `keeps spritescreate=${blocks.includes('spritescreate')}, ` +
+         `keeps MEMBER=${blocks.includes('MEMBER')}`, 'ok');
+  }
+});
+
+line('probe started; waiting for the editor…');
+setTimeout(() => {
+  if (!sawSave) line('no workspacesave yet — move a block in the editor to trigger one', 'bad');
+}, 45000);
+</script>

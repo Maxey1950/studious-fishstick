@@ -101,7 +101,8 @@
     "typecheck": "tsc --noEmit",
     "open-in-browser": "npm run compile && vscode-test-web --browserType=chromium --extensionDevelopmentPath=. ./sample",
     "test": "npm run compile && node test/roundtrip.mjs",
-    "arcade:refresh": "node scripts/fetchArcade.mjs && node scripts/generateArcadeBlocks.mjs"
+    "arcade:refresh": "node scripts/fetchArcade.mjs && node scripts/generateArcadeBlocks.mjs",
+    "probe:embed": "node probe/serve.mjs"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",

@@ -219,6 +219,60 @@ In rough order of value:
 6. **Collaboration limits:** two people dragging *the same* block still conflict
    (last write wins); there are no remote cursors on the canvas.
 
+### Open: embedding the real MakeCode Arcade editor
+
+The user wants **the genuine Arcade editor**, not a recreation, still editing the
+`.blocks` file so Live Share works. Researched 2026-09-16 — the protocol exists
+and supports it.
+
+MakeCode's **controller embedding** (`?controller=1&ws=browser`) speaks a
+postMessage protocol, typed in `pxt-core/localtypings/pxteditor.d.ts`:
+
+- `workspacesync` — editor asks the host for its projects; host replies with
+  `{ type: "pxthost", id, success: true, projects: [project] }`.
+- `workspacesave` — **editor pushes `{ project }` to the host on every change.**
+  This is the piece that makes the design work: no polling needed.
+- `importproject` — host pushes a project into the editor.
+- Also available: `switchblocks`, `renderblocks`, `proxytosim`,
+  `workspacediagnostics`, and a simulator channel.
+
+Architecture would be: iframe the editor, answer `workspacesync` with the
+document's `.blocks`, and on `workspacesave` write `project.text['main.blocks']`
+back through the same `WorkspaceEdit` path the Blockly build already uses — so
+Live Share replication is unchanged.
+
+**Unverified.** Whether the editor renders and completes the handshake inside a
+VS Code webview iframe could not be tested in the build sandbox: outbound HTTPS
+goes through a proxy whose CA Chromium does not trust, `certutil` is not
+installable, and disabling TLS verification is prohibited. `curl` reaches
+MakeCode; a browser in that sandbox cannot.
+
+`npm run probe:embed` serves `probe/embed-probe.html` on http://localhost:4173.
+Open it on a normal network and move a block: it reports whether the editor
+loads, requests sync, renders the blocks, and pushes `workspacesave`. If the
+last one fires, the design is confirmed. It must be served over http — MakeCode
+checks the embedding origin, so `file://` will not handshake.
+
+**Costs to weigh before building it** (these cut against the collaboration goal):
+
+1. **No patch API — `importproject` replaces the whole project.** A remote edit
+   arriving forces a full editor rebuild: scroll, selection and undo history are
+   lost. The Blockly build reloads only the workspace and restores scroll, so
+   simultaneous editing is *better* there, not worse.
+2. **Bigger diffs, more conflicts.** MakeCode re-serializes the whole project;
+   the Blockly build preserves block ids and ordering so a one-block change is a
+   one-line diff. Large diffs collide far more often under Live Share's OT.
+3. **A project is four files** (`main.blocks`, `main.ts`, `pxt.json`,
+   `assets.json`). Modern Arcade keeps tilemaps and the image library in
+   `assets.json`; a lone `.blocks` document has nowhere to put them. Decide
+   between sidecar files, a container format, or accepting the loss.
+4. **Network-only and heavy** — no offline use, slower open.
+
+Suggested shape if pursued: keep both engines behind a setting
+(`blocksEditor.engine: "blockly" | "makecode"`), so the offline, fine-grained
+Blockly path stays the default and the embedded editor is opt-in for fidelity.
+The provider, `textDiff.ts` and the write-back path are engine-agnostic already.
+
 ### Considered and rejected: switching to pxt-blockly
 
 Asked whether to rebuild on Microsoft's Blockly fork (`pxt-blockly`) instead of
