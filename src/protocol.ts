@@ -11,6 +11,8 @@ export type HostMessage =
       editable: boolean;
       mediaUri: string;
       debounceMs: number;
+      /** Idle time before a remote change is applied (MakeCode engine). */
+      remoteApplyDelayMs: number;
     }
   /** The underlying text document changed — from undo, a text editor on the
    * same file, or a Live Share participant. */

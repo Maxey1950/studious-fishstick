@@ -12,15 +12,25 @@
  */
 
 export interface SyncOptions {
-  /** Quiet period before a local edit is broadcast. */
+  /**
+   * Quiet period after the last local change before it is written out. Lower is
+   * more responsive for everyone else, at the cost of more document revisions.
+   */
   sendDebounceMs: number;
-  /** How long the local user must be idle before a remote change is applied. */
+  /**
+   * How long the local user must be idle before a remote change is applied.
+   *
+   * This is not politeness: applying one rebuilds the whole editor, so landing
+   * it mid-gesture would take the block out of the user's hand. Someone who has
+   * not edited at all is never delayed — the wait starts from their last change,
+   * so a passive viewer sees updates immediately.
+   */
   applyAfterIdleMs: number;
 }
 
 export const DEFAULT_SYNC_OPTIONS: SyncOptions = {
-  sendDebounceMs: 700,
-  applyAfterIdleMs: 2000,
+  sendDebounceMs: 250,
+  applyAfterIdleMs: 900,
 };
 
 export type SyncEffect =

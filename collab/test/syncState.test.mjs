@@ -94,6 +94,24 @@ check('an unsent local edit is sent before a remote one is applied', () => {
   assert.deepEqual(sync.next(9000), { kind: 'apply', blocks: '<xml>theirs</xml>' });
 });
 
+check('someone who is not editing gets remote changes immediately', () => {
+  // The idle window is measured from the viewer's own last change, so a person
+  // who is watching rather than editing never waits for it.
+  const sync = new SyncState(OPTIONS);
+  sync.onRemoteChange('<xml>theirs</xml>', 1000);
+  assert.deepEqual(sync.next(1000), { kind: 'apply', blocks: '<xml>theirs</xml>' },
+    'no local edits means nothing to protect, so apply at once');
+});
+
+check('the idle window is measured from the last local change', () => {
+  const sync = new SyncState({ sendDebounceMs: 250, applyAfterIdleMs: 900 });
+  sync.onLocalChange('<xml>mine</xml>', 1000);
+  assert.deepEqual(sync.next(1250), { kind: 'broadcast', blocks: '<xml>mine</xml>' });
+  sync.onRemoteChange('<xml>theirs</xml>', 1300);
+  assert.deepEqual(sync.next(1500), { kind: 'wait', untilMs: 1900 }, 'still within the window');
+  assert.deepEqual(sync.next(1900), { kind: 'apply', blocks: '<xml>theirs</xml>' });
+});
+
 check('a remote change identical to ours is ignored', () => {
   const sync = new SyncState(OPTIONS);
   sync.onLocalChange('<xml>same</xml>', 1000);

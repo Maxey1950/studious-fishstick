@@ -20,7 +20,7 @@ import {
   importProjectMessage,
   type ArcadeProject,
 } from '../../shared/arcadeProtocol';
-import { DEFAULT_SYNC_OPTIONS, SyncState } from '../../shared/syncState';
+import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/syncState';
 
 const vscodeApi = acquireVsCodeApi();
 
@@ -42,7 +42,8 @@ function loadEditor(url: string): void {
 
 /** The project we hand the editor when it asks, kept current as edits land. */
 let project: ArcadeProject = createProject('blocks', '');
-let sync = new SyncState(DEFAULT_SYNC_OPTIONS);
+let syncOptions: SyncOptions = DEFAULT_SYNC_OPTIONS;
+let sync = new SyncState(syncOptions);
 let booted = false;
 let timer: number | undefined;
 /** The document as the extension last reported it, for the safety check below. */
@@ -149,9 +150,13 @@ window.addEventListener('message', (event: MessageEvent) => {
 function handleHostMessage(message: HostMessage): void {
   switch (message.type) {
     case 'init':
+      syncOptions = {
+        sendDebounceMs: message.debounceMs,
+        applyAfterIdleMs: message.remoteApplyDelayMs,
+      };
       documentBlocks = message.xml;
       project = createProject('blocks', message.xml);
-      sync = new SyncState(DEFAULT_SYNC_OPTIONS);
+      sync = new SyncState(syncOptions);
       sync.onRemoteChange(message.xml, Date.now());
       if (!booted) {
         booted = true;

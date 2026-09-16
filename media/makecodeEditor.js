@@ -79,8 +79,8 @@
 
   // src/shared/syncState.ts
   var DEFAULT_SYNC_OPTIONS = {
-    sendDebounceMs: 700,
-    applyAfterIdleMs: 2e3
+    sendDebounceMs: 250,
+    applyAfterIdleMs: 900
   };
   var SyncState = class {
     constructor(options = DEFAULT_SYNC_OPTIONS) {
@@ -154,7 +154,8 @@
     }
   }
   var project = createProject("blocks", "");
-  var sync = new SyncState(DEFAULT_SYNC_OPTIONS);
+  var syncOptions = DEFAULT_SYNC_OPTIONS;
+  var sync = new SyncState(syncOptions);
   var booted = false;
   var timer;
   var documentBlocks = "";
@@ -232,9 +233,13 @@
   function handleHostMessage(message) {
     switch (message.type) {
       case "init":
+        syncOptions = {
+          sendDebounceMs: message.debounceMs,
+          applyAfterIdleMs: message.remoteApplyDelayMs
+        };
         documentBlocks = message.xml;
         project = createProject("blocks", message.xml);
-        sync = new SyncState(DEFAULT_SYNC_OPTIONS);
+        sync = new SyncState(syncOptions);
         sync.onRemoteChange(message.xml, Date.now());
         if (!booted) {
           booted = true;

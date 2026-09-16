@@ -2,7 +2,7 @@
   "name": "blocks-editor-web",
   "displayName": "Blocks Editor (.blocks)",
   "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "publisher": "MaxeyTheCat",
   "license": "MIT",
   "engines": {
@@ -75,10 +75,10 @@
       "properties": {
         "blocksEditor.writeDebounceMs": {
           "type": "number",
-          "default": 200,
+          "default": 250,
           "minimum": 0,
           "maximum": 5000,
-          "description": "How long to wait after the last block change before writing back to the file. Lower values feel more live over Live Share but produce more document revisions."
+          "description": "How long to wait after the last block change before writing it to the file. Lower means collaborators see your changes sooner, at the cost of more document revisions."
         },
         "blocksEditor.renderer": {
           "type": "string",
@@ -126,6 +126,13 @@
           ],
           "default": "credentialless",
           "description": "Which element embeds the MakeCode editor. \"credentialless\" is the one that works under vscode.dev’s embedder policy."
+        },
+        "blocksEditor.remoteApplyDelayMs": {
+          "type": "number",
+          "default": 900,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "How long you must be idle before someone else's change is applied. Applying one reloads the editor, so a short delay keeps it from interrupting you mid-drag. If you are not editing, changes appear immediately regardless. Lower is more live; 0 applies them the moment they arrive."
         }
       }
     }
