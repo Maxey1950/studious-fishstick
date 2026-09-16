@@ -219,6 +219,35 @@ In rough order of value:
 6. **Collaboration limits:** two people dragging *the same* block still conflict
    (last write wins); there are no remote cursors on the canvas.
 
+### Considered and rejected: switching to pxt-blockly
+
+Asked whether to rebuild on Microsoft's Blockly fork (`pxt-blockly`) instead of
+upstream Blockly. **Do not.** Researched 2026-09-16:
+
+- `pxt-blockly` was last published **July 2022** (v4.0.15) and is abandoned.
+- `pxt-core@13.2.4` depends on **`blockly: 13.1.1`** — MakeCode migrated to
+  upstream Blockly. This project uses `blockly@^13.3.0`, so it is *already* on
+  the same engine MakeCode runs.
+
+The worthwhile version of that idea is to adopt what pxt layers *on top* of
+Blockly, which lives in `pxt-core/pxtblocks/` (158 modules: a renderer plugin,
+colorpicker, functions/flyout/comment plugins). Note the npm package ships
+**only `.d.ts` files — zero JavaScript**; the implementation is compiled into the
+monolithic `built/web/main.js`. Porting therefore means working from the
+`microsoft/pxt` GitHub source, which is MIT (attribution required).
+
+Concretely, in value order:
+
+1. `@blockly/field-grid-dropdown` (an off-the-shelf plugin pxt-core itself
+   depends on) supplies the `gridpicker` editor — 27 uses, the most common
+   field editor still unimplemented. Cheapest, highest coverage.
+2. Port pxt's renderer plugin for true MakeCode block geometry; this also fixes
+   the `on start` wrapper cosmetic noted above.
+3. Port the colorpicker to replace `colourField.ts`.
+
+pxt-core also uses `@blockly/plugin-workspace-search`, if block search is ever
+wanted. None of these touch the sync model.
+
 Also untouched: `.github/workflows/azure-webapps-node.yml` on `main` is an
 unrelated Azure Node deploy workflow that will fail against this repo. The user
 was asked and did not say to remove it.
