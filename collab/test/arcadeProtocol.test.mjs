@@ -22,7 +22,7 @@ const dir = await mkdtemp(join(tmpdir(), 'arcade-protocol-'));
 const modulePath = join(dir, 'arcadeProtocol.mjs');
 await writeFile(modulePath, outputFiles[0].text);
 const { handleEditorMessage, createProject, blocksOf, importProjectMessage,
-  hasNoBlocks, ARCADE_EDITOR_URL } = await import(modulePath);
+  hasNoBlocks, withBlocks, ARCADE_EDITOR_URL } = await import(modulePath);
 
 let failures = 0;
 const check = (name, fn) => {
@@ -107,6 +107,32 @@ check('importproject is addressed to the editor', () => {
   assert.equal(message.type, 'pxteditor', 'commands to the editor use pxteditor');
   assert.equal(message.action, 'importproject');
   assert.equal(blocksOf(message.project), '<xml>blocks</xml>');
+});
+
+check('applying blocks keeps the extension list and assets', () => {
+  // pxt.json holds the project's extensions. Rebuilding a project from its
+  // blocks would drop it, so adding an extension and then receiving someone
+  // else's edit would silently remove the extension.
+  const withExtension = {
+    header: { name: 'demo' },
+    text: {
+      'main.blocks': '<xml>old</xml>',
+      'main.ts': 'generated',
+      'assets.json': '{"tiles":1}',
+      'pxt.json': JSON.stringify({ name: 'demo', dependencies: { device: '*', jacdac: 'github:x/y' } }),
+    },
+  };
+
+  const updated = withBlocks(withExtension, '<xml>new</xml>');
+  assert.equal(blocksOf(updated), '<xml>new</xml>', 'blocks are replaced');
+  assert.equal(updated.text['assets.json'], '{"tiles":1}', 'assets survive');
+  assert.equal(updated.text['main.ts'], 'generated', 'generated source survives');
+  assert.deepEqual(
+    JSON.parse(updated.text['pxt.json']).dependencies,
+    { device: '*', jacdac: 'github:x/y' },
+    'extensions survive'
+  );
+  assert.equal(updated.header, withExtension.header, 'header is kept');
 });
 
 check('the editor is told its workspace is the host page', () => {

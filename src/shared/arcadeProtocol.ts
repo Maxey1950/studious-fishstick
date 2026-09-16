@@ -161,3 +161,18 @@ export function createProject(name: string, blocks: string): ArcadeProject {
 export function blocksOf(project: ArcadeProject): string {
   return project.text['main.blocks'] ?? '';
 }
+
+/**
+ * Puts new block XML into an existing project, keeping every other file.
+ *
+ * Rebuilding the project from the blocks alone would discard `pxt.json`, which
+ * is where the extension list lives, along with `assets.json` and any generated
+ * `main.ts`. Adding an extension and then receiving someone else's edit would
+ * silently remove the extension.
+ */
+export function withBlocks(project: ArcadeProject, blocks: string): ArcadeProject {
+  return {
+    header: project.header,
+    text: { ...project.text, 'main.blocks': blocks },
+  };
+}

@@ -76,6 +76,12 @@
   function blocksOf(project2) {
     return project2.text["main.blocks"] ?? "";
   }
+  function withBlocks(project2, blocks) {
+    return {
+      header: project2.header,
+      text: { ...project2.text, "main.blocks": blocks }
+    };
+  }
 
   // src/shared/syncState.ts
   var DEFAULT_SYNC_OPTIONS = {
@@ -186,7 +192,7 @@
         pump();
         return;
       case "apply": {
-        project = createProject("blocks", effect.blocks);
+        project = withBlocks(project, effect.blocks);
         frame.contentWindow?.postMessage(importProjectMessage(project), "*");
         showStatus(void 0);
         pump();

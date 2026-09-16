@@ -18,6 +18,7 @@ import {
   handleEditorMessage,
   hasNoBlocks,
   importProjectMessage,
+  withBlocks,
   type ArcadeProject,
 } from '../../shared/arcadeProtocol';
 import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/syncState';
@@ -84,7 +85,9 @@ function pump(): void {
       return;
 
     case 'apply': {
-      project = createProject('blocks', effect.blocks);
+      // Keep pxt.json (the extension list), assets.json and main.ts; only the
+      // blocks came from the other participant.
+      project = withBlocks(project, effect.blocks);
       frame.contentWindow?.postMessage(importProjectMessage(project), '*');
       showStatus(undefined);
       pump();
