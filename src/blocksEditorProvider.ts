@@ -208,7 +208,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
   private embedElementFor(document: vscode.TextDocument): EmbedElement {
     return vscode.workspace
       .getConfiguration('blocksEditor', document.uri)
-      .get<EmbedElement>('embedElement', 'iframe');
+      .get<EmbedElement>('embedElement', 'credentialless');
   }
 
   private engineFor(document: vscode.TextDocument): 'makecode' | 'blockly' {
@@ -301,18 +301,24 @@ ${embedTag(embedElement)}
   }
 }
 
-type EmbedElement = 'iframe' | 'object' | 'embed';
+type EmbedElement = 'credentialless' | 'iframe' | 'object' | 'embed';
 
 /**
  * The element that hosts the MakeCode editor.
  *
- * `<object>` and `<embed>` exist here because vscode.dev serves its pages with
- * `Cross-Origin-Embedder-Policy: require-corp`, under which a cross-origin
- * iframe must assert COEP itself — MakeCode does not, so the iframe is refused.
- * Those elements have historically been checked against
- * `Cross-Origin-Resource-Policy` instead, which MakeCode does send, so they may
- * load where the iframe cannot. All three expose `contentWindow`, which is what
- * the controller protocol needs.
+ * vscode.dev serves its pages with `Cross-Origin-Embedder-Policy: require-corp`,
+ * under which a cross-origin iframe must assert COEP itself. MakeCode does not,
+ * so a plain iframe is refused there — as are `<object>` and `<embed>`, which
+ * current Chrome treats the same way.
+ *
+ * `credentialless` is the way through: Chrome added it precisely so a
+ * require-corp document can embed cross-origin content lacking COEP, by loading
+ * it without credentials and in ephemeral storage. That costs nothing here,
+ * since the project reaches the editor over the controller protocol rather than
+ * through its cookies or its own storage.
+ *
+ * The others are kept because a plain iframe does work in desktop VS Code, where
+ * no such policy applies.
  */
 function embedTag(kind: EmbedElement): string {
   const title = 'MakeCode Arcade editor';
@@ -322,8 +328,12 @@ function embedTag(kind: EmbedElement): string {
     case 'embed':
       return `<embed id="editor" type="text/html" title="${title}">`;
     case 'iframe':
-    default:
       return `<iframe id="editor" title="${title}" allow="autoplay; fullscreen"></iframe>`;
+    case 'credentialless':
+    default:
+      // `credentialless` is a boolean attribute; browsers without support ignore
+      // it and treat this as an ordinary iframe.
+      return `<iframe id="editor" title="${title}" credentialless allow="autoplay; fullscreen"></iframe>`;
   }
 }
 

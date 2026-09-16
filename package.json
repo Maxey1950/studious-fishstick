@@ -2,7 +2,7 @@
   "name": "blocks-editor-web",
   "displayName": "Blocks Editor (.blocks)",
   "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "MaxeyTheCat",
   "license": "MIT",
   "engines": {
@@ -113,17 +113,19 @@
         "blocksEditor.embedElement": {
           "type": "string",
           "enum": [
+            "credentialless",
             "iframe",
             "object",
             "embed"
           ],
           "enumDescriptions": [
-            "Standard iframe. Under a cross-origin-embedder-policy of require-corp (as on vscode.dev) the embedded page must assert COEP itself, which MakeCode does not.",
-            "<object>. Historically checked against Cross-Origin-Resource-Policy rather than COEP inheritance, which MakeCode does satisfy — so this may load where an iframe is refused.",
-            "<embed>. Same idea as <object>, different element."
+            "A credentialless iframe. Chrome added this exactly so a page with Cross-Origin-Embedder-Policy: require-corp (which vscode.dev sets) can embed cross-origin content that does not assert COEP itself. The frame gets no cookies and fresh storage, which costs nothing here because the project is supplied over the controller protocol.",
+            "A standard iframe. Works in desktop VS Code; refused on vscode.dev, where require-corp applies.",
+            "<object>. Refused on vscode.dev as well.",
+            "<embed>. Refused on vscode.dev as well."
           ],
-          "default": "iframe",
-          "description": "Which element embeds the MakeCode editor. Try \"object\" if the editor refuses to connect."
+          "default": "credentialless",
+          "description": "Which element embeds the MakeCode editor. \"credentialless\" is the one that works under vscode.dev’s embedder policy."
         }
       }
     }
