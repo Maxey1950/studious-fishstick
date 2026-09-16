@@ -315,6 +315,43 @@ MakeCode, write the returned id to the mutable cell, and have peers poll the
 cell. Prefer plain HTTPS polling over WebSockets or WebRTC — school filters
 commonly block both.
 
+### Conclusion: not deployable to the target device
+
+After testing every available route, **real-time collaboration cannot be
+delivered to the user's school-managed device.** Do not re-run this search.
+
+Blocked on the device (Securly, filters at home too): GitHub, GitHub Pages,
+`workers.dev`, `script.google.com`, claude.ai, `netlify.app`, `vercel.app`.
+Allowed: `arcade.makecode.com`. Note the pattern — `netlify.com` is allowed
+while `netlify.app` is blocked: the filter permits companies' marketing sites
+and blocks the domains where anyone can host anything. That rule predicts
+`pages.dev`, `glitch.me`, `repl.co` and `cdpn.io` too, so host-hunting is not
+worth more effort.
+
+The two hosting-free fallbacks are also gone:
+
+- **Bookmarklet** (code in the bookmark, injected into the allowed MakeCode
+  page): `javascript:` URLs are disabled by device policy.
+- **Browser extension**: cannot be installed on a managed Chromebook.
+- **MakeCode extensions** do not help either — they are TypeScript libraries
+  compiled into the *game*, with no access to the editor or to edit-time
+  network calls.
+
+No allowlist request is possible. A web app must be served from some domain,
+and every candidate is blocked, so the work stops here for that device.
+
+**What still has value:**
+
+- The VS Code extension (commits `fa2bf81`..`cf3548f`) works on any unfiltered
+  machine and was the original request.
+- `collab/src/` (the MakeCode controller handshake and the sync rules, both
+  tested) and `collab/netlify/functions/room.mts` are complete and
+  host-agnostic. If a host ever becomes available, finishing the app is the
+  page shell plus a polling transport — a few hours, not a redesign.
+
+What the user can do on the school device today, with allowed domains only:
+MakeCode's own Share button for turn-taking collaboration on one project.
+
 ### Considered and rejected: switching to pxt-blockly
 
 Asked whether to rebuild on Microsoft's Blockly fork (`pxt-blockly`) instead of
