@@ -92,9 +92,9 @@
           "description": "Which renderer draws the blocks.",
           "enumDescriptions": [
             "MakeCode's own renderer, ported from pxt. Blocks get the exact geometry the Arcade editor draws.",
-            "Blockly’s rounded renderer, which pxt’s is derived from.",
-            "Blockly’s classic renderer.",
-            "Blockly’s thin renderer."
+            "Blockly\u2019s rounded renderer, which pxt\u2019s is derived from.",
+            "Blockly\u2019s classic renderer.",
+            "Blockly\u2019s thin renderer."
           ]
         },
         "blocksEditor.engine": {
@@ -105,7 +105,7 @@
           ],
           "enumDescriptions": [
             "Embed the real MakeCode Arcade editor. Every block, the image and tilemap editors and the simulator are the genuine ones. Requires access to arcade.makecode.com.",
-            "Use the built-in Blockly editor. Works with no network access, and merges simultaneous edits more finely, but does not include MakeCode’s tilemap, melody or grid editors."
+            "Use the built-in Blockly editor. Works with no network access, and merges simultaneous edits more finely, but does not include MakeCode\u2019s tilemap, melody or grid editors."
           ],
           "default": "makecode",
           "description": "Which editor to draw .blocks files with."
@@ -114,18 +114,20 @@
           "type": "string",
           "enum": [
             "credentialless",
+            "blob",
             "iframe",
             "object",
             "embed"
           ],
           "enumDescriptions": [
-            "A credentialless iframe. Chrome added this exactly so a page with Cross-Origin-Embedder-Policy: require-corp (which vscode.dev sets) can embed cross-origin content that does not assert COEP itself. The frame gets no cookies and fresh storage, which costs nothing here because the project is supplied over the controller protocol.",
-            "A standard iframe. Works in desktop VS Code; refused on vscode.dev, where require-corp applies.",
-            "<object>. Refused on vscode.dev as well.",
-            "<embed>. Refused on vscode.dev as well."
+            "A credentialless iframe. Works on vscode.dev, where the embedder policy refuses an ordinary cross-origin iframe. The editor stays cross-origin, so a collaborator\u2019s change has to be applied with importproject, which reloads the editor.",
+            "Experimental. Fetches MakeCode\u2019s page and loads it from a blob, which makes the editor same-origin with this webview. That allows applying a change directly to its workspace, with no reload \u2014 if MakeCode tolerates running from a blob origin.",
+            "A standard iframe. Works in desktop VS Code; refused on vscode.dev.",
+            "<object>. Refused on vscode.dev.",
+            "<embed>. Refused on vscode.dev."
           ],
           "default": "credentialless",
-          "description": "Which element embeds the MakeCode editor. \"credentialless\" is the one that works under vscode.dev’s embedder policy."
+          "description": "Which element embeds the MakeCode editor. \"credentialless\" is the one that works under vscode.dev\u2019s embedder policy."
         },
         "blocksEditor.remoteApplyDelayMs": {
           "type": "number",
