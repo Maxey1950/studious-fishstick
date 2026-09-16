@@ -43,8 +43,11 @@ check('a valid project is built around the blocks', () => {
 });
 
 check('workspacesync is answered with the project', () => {
+  // The editor addresses the host on the `pxthost` channel. Requiring
+  // `pxteditor` here made the editor's request be ignored, and it hung on its
+  // splash screen waiting for a reply that never came.
   const outcome = handleEditorMessage(
-    { type: 'pxteditor', action: 'workspacesync', id: 'req-1' }, project);
+    { type: 'pxthost', action: 'workspacesync', id: 'req-1' }, project);
   assert.equal(outcome.kind, 'reply');
   assert.equal(outcome.message.type, 'pxthost');
   assert.equal(outcome.message.id, 'req-1', 'the reply must echo the request id');
@@ -56,20 +59,20 @@ check('workspacesync is answered with the project', () => {
 check('workspacesave is reported as a change', () => {
   const edited = createProject('demo', '<xml>edited</xml>');
   const outcome = handleEditorMessage(
-    { type: 'pxteditor', action: 'workspacesave', project: edited }, project);
+    { type: 'pxthost', action: 'workspacesave', project: edited }, project);
   assert.equal(outcome.kind, 'projectChanged');
   assert.equal(blocksOf(outcome.project), '<xml>edited</xml>');
 });
 
 check('a workspacesave without a project is ignored', () => {
   const outcome = handleEditorMessage(
-    { type: 'pxteditor', action: 'workspacesave' }, project);
+    { type: 'pxthost', action: 'workspacesave' }, project);
   assert.equal(outcome.kind, 'ignore');
 });
 
 check('load notifications become status', () => {
   for (const action of ['workspaceloaded', 'editorcontentloaded']) {
-    const outcome = handleEditorMessage({ type: 'pxteditor', action }, project);
+    const outcome = handleEditorMessage({ type: 'pxthost', action }, project);
     assert.equal(outcome.kind, 'status', action);
     assert.equal(outcome.status, 'ready');
   }
@@ -82,6 +85,8 @@ check('messages from anything but the editor are ignored', () => {
     { type: 'pxtsim', action: 'workspacesave', project },
     { action: 'workspacesave', project },
     { type: 'evil', action: 'workspacesync' },
+    // Our own outgoing command echoing back must not be treated as input.
+    { type: 'pxteditor', action: 'importproject', project },
     null,
     'workspacesave',
     42,
@@ -93,13 +98,13 @@ check('messages from anything but the editor are ignored', () => {
 
 check('unknown actions are ignored rather than mishandled', () => {
   assert.equal(
-    handleEditorMessage({ type: 'pxteditor', action: 'tutorialevent' }, project).kind,
+    handleEditorMessage({ type: 'pxthost', action: 'tutorialevent' }, project).kind,
     'ignore');
 });
 
-check('importproject carries the project', () => {
+check('importproject is addressed to the editor', () => {
   const message = importProjectMessage(project);
-  assert.equal(message.type, 'pxthost');
+  assert.equal(message.type, 'pxteditor', 'commands to the editor use pxteditor');
   assert.equal(message.action, 'importproject');
   assert.equal(blocksOf(message.project), '<xml>blocks</xml>');
 });

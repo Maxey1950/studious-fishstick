@@ -1,10 +1,15 @@
 /**
  * The MakeCode Arcade controller-embed protocol.
  *
- * Typed from pxt-core's own `localtypings/pxteditor.d.ts`. The editor is loaded
- * with `?controller=1&ws=browser`, which makes it treat this page as its
- * workspace host: it asks us for projects, and pushes the project back every
- * time it changes.
+ * Typed from pxt-core's own `localtypings/pxteditor.d.ts` and checked against
+ * the shipped editor bundle. The editor is loaded with `?controller=1&ws=iframe`,
+ * which makes it treat this page as its workspace host: it asks us for projects,
+ * and pushes the project back every time it changes.
+ *
+ * Note which way the `type` field points, because it is easy to get backwards:
+ * messages the editor sends *to the host* are `pxthost`, and commands the host
+ * sends *to the editor* are `pxteditor`. A response to a host-channel request
+ * keeps `pxthost` and echoes the request's id.
  *
  * Message handling is written as a pure function so the handshake can be tested
  * without a browser or a network.
@@ -67,13 +72,24 @@ export function handleEditorMessage(
   message: EditorMessage,
   project: ArcadeProject
 ): BridgeOutcome {
-  if (!message || typeof message !== 'object' || message.type !== 'pxteditor') {
+  // `pxthost` is the editor talking to us. `pxteditor` is us talking to it, so
+  // seeing one here means our own message echoed back.
+  if (!message || typeof message !== 'object' || message.type !== 'pxthost') {
     return { kind: 'ignore' };
   }
 
   switch (message.action) {
     case 'workspacesync':
       // The editor is asking for the list of projects it should work with.
+      // A response stays on the host channel and echoes the request id.
+      return {
+        kind: 'reply',
+        message: { type: 'pxthost', id: message.id, success: true, projects: [project] },
+      };
+
+    case 'newproject':
+      // Sent when the editor would otherwise create an empty project. Answering
+      // keeps it from replacing the file with a blank one.
       return {
         kind: 'reply',
         message: { type: 'pxthost', id: message.id, success: true, projects: [project] },
@@ -98,9 +114,10 @@ export function handleEditorMessage(
   }
 }
 
-/** Builds the message that loads a project into the editor. */
+/** Builds the message that loads a project into the editor. Host-to-editor
+ * commands travel on the `pxteditor` channel. */
 export function importProjectMessage(project: ArcadeProject): Record<string, unknown> {
-  return { type: 'pxthost', action: 'importproject', project };
+  return { type: 'pxteditor', action: 'importproject', project };
 }
 
 /** A minimal Arcade project around a `.blocks` document. */

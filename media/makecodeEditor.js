@@ -6,11 +6,16 @@
     return !/<block\b/i.test(xml);
   }
   function handleEditorMessage(message, project2) {
-    if (!message || typeof message !== "object" || message.type !== "pxteditor") {
+    if (!message || typeof message !== "object" || message.type !== "pxthost") {
       return { kind: "ignore" };
     }
     switch (message.action) {
       case "workspacesync":
+        return {
+          kind: "reply",
+          message: { type: "pxthost", id: message.id, success: true, projects: [project2] }
+        };
+      case "newproject":
         return {
           kind: "reply",
           message: { type: "pxthost", id: message.id, success: true, projects: [project2] }
@@ -31,7 +36,7 @@
     }
   }
   function importProjectMessage(project2) {
-    return { type: "pxthost", action: "importproject", project: project2 };
+    return { type: "pxteditor", action: "importproject", project: project2 };
   }
   function createProject(name, blocks) {
     return {
