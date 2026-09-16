@@ -3,7 +3,7 @@
   "displayName": "Blocks Editor (.blocks)",
   "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
   "version": "0.0.4",
-  "publisher": "maxey1950",
+  "publisher": "MaxeyTheCat",
   "license": "MIT",
   "engines": {
     "vscode": "^1.80.0"
