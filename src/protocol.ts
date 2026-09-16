@@ -25,4 +25,6 @@ export type WebviewMessage =
   /** Something went wrong in the webview and should surface to the user. */
   | { type: 'error'; message: string }
   /** Non-fatal note (e.g. unknown MakeCode block types were stubbed). */
-  | { type: 'info'; message: string };
+  | { type: 'info'; message: string }
+  /** The embedded MakeCode editor never responded; offer the built-in one. */
+  | { type: 'editorUnavailable' };

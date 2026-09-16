@@ -146,6 +146,13 @@
   var vscodeApi = acquireVsCodeApi();
   var statusEl = document.getElementById("status");
   var frame = document.getElementById("editor");
+  function loadEditor(url) {
+    if (frame.tagName.toLowerCase() === "object") {
+      frame.data = url;
+    } else {
+      frame.src = url;
+    }
+  }
   var project = createProject("blocks", "");
   var sync = new SyncState(DEFAULT_SYNC_OPTIONS);
   var booted = false;
@@ -232,7 +239,7 @@
         if (!booted) {
           booted = true;
           showStatus("Loading the MakeCode Arcade editor\u2026");
-          frame.src = ARCADE_EDITOR_URL;
+          loadEditor(ARCADE_EDITOR_URL);
           sync.next(Date.now());
         } else {
           pump();
@@ -254,8 +261,9 @@
     }
     if (statusEl.textContent?.startsWith("Loading")) {
       showStatus(
-        "The MakeCode editor has not responded. It may be blocked on this network, or the editor may still be starting."
+        "The MakeCode editor did not load. Your file has not been changed."
       );
+      post({ type: "editorUnavailable" });
     }
   }, 3e4);
   post({ type: "ready" });

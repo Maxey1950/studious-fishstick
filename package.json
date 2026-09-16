@@ -2,7 +2,7 @@
   "name": "blocks-editor-web",
   "displayName": "Blocks Editor (.blocks)",
   "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
-  "version": "0.0.4",
+  "version": "0.0.6",
   "publisher": "MaxeyTheCat",
   "license": "MIT",
   "engines": {
@@ -109,6 +109,21 @@
           ],
           "default": "makecode",
           "description": "Which editor to draw .blocks files with."
+        },
+        "blocksEditor.embedElement": {
+          "type": "string",
+          "enum": [
+            "iframe",
+            "object",
+            "embed"
+          ],
+          "enumDescriptions": [
+            "Standard iframe. Under a cross-origin-embedder-policy of require-corp (as on vscode.dev) the embedded page must assert COEP itself, which MakeCode does not.",
+            "<object>. Historically checked against Cross-Origin-Resource-Policy rather than COEP inheritance, which MakeCode does satisfy — so this may load where an iframe is refused.",
+            "<embed>. Same idea as <object>, different element."
+          ],
+          "default": "iframe",
+          "description": "Which element embeds the MakeCode editor. Try \"object\" if the editor refuses to connect."
         }
       }
     }

@@ -42,7 +42,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     };
     const engine = this.engineFor(document);
     webview.html =
-      engine === 'makecode' ? this.buildMakeCodeHtml(webview) : this.buildBlocklyHtml(webview);
+      engine === 'makecode'
+        ? this.buildMakeCodeHtml(webview, this.embedElementFor(document))
+        : this.buildBlocklyHtml(webview);
 
     /**
      * The last XML this webview handed us. When the resulting document change
@@ -105,6 +107,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
             return;
           case 'info':
             void vscode.window.showWarningMessage(`Blocks Editor: ${message.message}`);
+            return;
+          case 'editorUnavailable':
+            await this.offerBuiltInEditor(document);
             return;
         }
       })
@@ -171,6 +176,41 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     }
   }
 
+  /**
+   * The embedded editor can fail for reasons outside this extension: a blocked
+   * network, or vscode.dev's `require-corp` embedder policy refusing an iframe
+   * that does not set COEP itself. Rather than leaving a dead panel, offer the
+   * built-in editor, which needs no network at all.
+   */
+  private async offerBuiltInEditor(document: vscode.TextDocument): Promise<void> {
+    const useBuiltIn = 'Use the built-in editor';
+    const choice = await vscode.window.showWarningMessage(
+      'Blocks Editor: the MakeCode Arcade editor could not be loaded. ' +
+        'This can happen when makecode.com is unreachable, or when the host refuses to embed it.',
+      useBuiltIn,
+      'Keep waiting'
+    );
+    if (choice !== useBuiltIn) {
+      return;
+    }
+
+    await vscode.workspace
+      .getConfiguration('blocksEditor', document.uri)
+      .update('engine', 'blockly', vscode.ConfigurationTarget.Global);
+    await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+    await vscode.commands.executeCommand(
+      'vscode.openWith',
+      document.uri,
+      BlocksEditorProvider.viewType
+    );
+  }
+
+  private embedElementFor(document: vscode.TextDocument): EmbedElement {
+    return vscode.workspace
+      .getConfiguration('blocksEditor', document.uri)
+      .get<EmbedElement>('embedElement', 'iframe');
+  }
+
   private engineFor(document: vscode.TextDocument): 'makecode' | 'blockly' {
     return vscode.workspace
       .getConfiguration('blocksEditor', document.uri)
@@ -181,7 +221,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
    * The MakeCode engine: a webview whose only content is an iframe of the real
    * Arcade editor, plus the bridge that keeps it and the document in step.
    */
-  private buildMakeCodeHtml(webview: vscode.Webview): string {
+  private buildMakeCodeHtml(webview: vscode.Webview, embedElement: EmbedElement): string {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'media', 'makecodeEditor.js')
     );
@@ -190,11 +230,13 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     );
     const nonce = createNonce();
 
-    // frame-src is the point of this policy: everything else stays shut, and
-    // only MakeCode's own editor may be framed.
+    // Both frame-src and object-src are opened to MakeCode, since the editor may
+    // be embedded with an iframe or with <object>/<embed>; everything else stays
+    // shut either way.
     const csp = [
       `default-src 'none'`,
       `frame-src https://arcade.makecode.com https://*.makecode.com`,
+      `object-src https://arcade.makecode.com https://*.makecode.com`,
       `img-src ${webview.cspSource} data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource}`,
@@ -212,7 +254,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
 </head>
 <body class="makecode-engine">
 <div id="status" class="status" role="status" hidden></div>
-<iframe id="editor" title="MakeCode Arcade editor" allow="autoplay; fullscreen"></iframe>
+${embedTag(embedElement)}
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
@@ -256,6 +298,32 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
+  }
+}
+
+type EmbedElement = 'iframe' | 'object' | 'embed';
+
+/**
+ * The element that hosts the MakeCode editor.
+ *
+ * `<object>` and `<embed>` exist here because vscode.dev serves its pages with
+ * `Cross-Origin-Embedder-Policy: require-corp`, under which a cross-origin
+ * iframe must assert COEP itself — MakeCode does not, so the iframe is refused.
+ * Those elements have historically been checked against
+ * `Cross-Origin-Resource-Policy` instead, which MakeCode does send, so they may
+ * load where the iframe cannot. All three expose `contentWindow`, which is what
+ * the controller protocol needs.
+ */
+function embedTag(kind: EmbedElement): string {
+  const title = 'MakeCode Arcade editor';
+  switch (kind) {
+    case 'object':
+      return `<object id="editor" type="text/html" title="${title}"></object>`;
+    case 'embed':
+      return `<embed id="editor" type="text/html" title="${title}">`;
+    case 'iframe':
+    default:
+      return `<iframe id="editor" title="${title}" allow="autoplay; fullscreen"></iframe>`;
   }
 }
 

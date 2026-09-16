@@ -25,7 +25,20 @@ import { DEFAULT_SYNC_OPTIONS, SyncState } from '../../shared/syncState';
 const vscodeApi = acquireVsCodeApi();
 
 const statusEl = document.getElementById('status') as HTMLDivElement;
-const frame = document.getElementById('editor') as HTMLIFrameElement;
+/** An <iframe>, <object> or <embed>, depending on the setting. Each exposes a
+ * `contentWindow`, which is all the controller protocol needs. */
+const frame = document.getElementById('editor') as HTMLIFrameElement &
+  HTMLObjectElement &
+  HTMLEmbedElement;
+
+/** `<object>` names its source `data`; the other two use `src`. */
+function loadEditor(url: string): void {
+  if (frame.tagName.toLowerCase() === 'object') {
+    frame.data = url;
+  } else {
+    frame.src = url;
+  }
+}
 
 /** The project we hand the editor when it asks, kept current as edits land. */
 let project: ArcadeProject = createProject('blocks', '');
@@ -143,7 +156,7 @@ function handleHostMessage(message: HostMessage): void {
       if (!booted) {
         booted = true;
         showStatus('Loading the MakeCode Arcade editor…');
-        frame.src = ARCADE_EDITOR_URL;
+        loadEditor(ARCADE_EDITOR_URL);
         // The editor asks for the project itself once it is up; the pending
         // remote change is consumed by that request rather than by an import.
         sync.next(Date.now());
@@ -171,9 +184,9 @@ setTimeout(() => {
   }
   if (statusEl.textContent?.startsWith('Loading')) {
     showStatus(
-      'The MakeCode editor has not responded. It may be blocked on this network, ' +
-        'or the editor may still be starting.'
+      'The MakeCode editor did not load. Your file has not been changed.'
     );
+    post({ type: 'editorUnavailable' });
   }
 }, 30000);
 

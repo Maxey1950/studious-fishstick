@@ -187,7 +187,9 @@ body:has(.status:not([hidden])) #blockly {
 
 /* ---- MakeCode engine (the real Arcade editor, embedded) ----------------- */
 
-body.makecode-engine #editor {
+body.makecode-engine #editor,
+body.makecode-engine object#editor,
+body.makecode-engine embed#editor {
   position: absolute;
   inset: 0;
   width: 100%;
