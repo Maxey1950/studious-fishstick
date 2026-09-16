@@ -333,6 +333,8 @@ The two hosting-free fallbacks are also gone:
 - **Bookmarklet** (code in the bookmark, injected into the allowed MakeCode
   page): `javascript:` URLs are disabled by device policy.
 - **Browser extension**: cannot be installed on a managed Chromebook.
+- **Google Sites** (an Embed block would have supplied both hosting and a
+  permitted domain): `sites.google.com` is blocked too.
 - **MakeCode extensions** do not help either — they are TypeScript libraries
   compiled into the *game*, with no access to the editor or to edit-time
   network calls.
