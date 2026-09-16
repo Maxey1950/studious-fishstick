@@ -1,7 +1,11 @@
+// First, so Blockly exists before any module below touches it.
+import './blocklyRuntime';
 import type { HostMessage, RendererName, WebviewMessage } from '../protocol';
 import { parseBlocksXml as parse } from './parse';
 import { serializeWorkspace } from './serialize';
 import { preserveUnknownFields, registerArcadeBlocks } from './arcade/register';
+// Registers itself with Blockly as the "pxt" renderer.
+import './arcade/renderer';
 import { createArcadeTheme } from './arcade/theme';
 import { buildArcadeToolbox } from './arcade/toolbox';
 import { defineStubsFor } from './stubBlocks';

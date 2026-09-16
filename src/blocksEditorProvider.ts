@@ -129,7 +129,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     );
     return {
       xml: document.getText(),
-      renderer: config.get<RendererName>('renderer', 'zelos'),
+      renderer: config.get<RendererName>('renderer', 'pxt'),
       editable: !this.isReadOnly(document),
       debounceMs: config.get<number>('writeDebounceMs', 200),
       // Blockly resolves its sprites and cursors relative to this, and wants a
@@ -222,7 +222,6 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     const asset = (...parts: string[]): vscode.Uri =>
       webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', ...parts));
 
-    const blocklyUri = asset('vendor', 'blockly', 'blockly.min.js');
     const scriptUri = asset('blocksEditor.js');
     const styleUri = asset('blocksEditor.css');
     const nonce = createNonce();
@@ -254,7 +253,6 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
 <body>
 <div id="status" class="status" role="status" hidden></div>
 <div id="blockly"></div>
-<script nonce="${nonce}" src="${blocklyUri}"></script>
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

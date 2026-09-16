@@ -24,13 +24,12 @@ const { outputFiles } = await build({
   target: 'es2022',
 });
 const stubBundle = outputFiles[0].text;
-const blocklySource = await readFile(join(root, 'media/vendor/blockly/blockly.min.js'), 'utf8');
 
 const browser = await chromium.launch();
 const page = await browser.newPage();
 page.on('pageerror', (error) => console.error('page error:', error.message));
 await page.setContent('<div id="blockly" style="width:800px;height:600px"></div>');
-await page.addScriptTag({ content: blocklySource });
+// Blockly now comes bundled inside the harness, as it does in the webview.
 await page.addScriptTag({ content: stubBundle });
 
 const sampleDir = join(root, 'sample');
@@ -51,7 +50,7 @@ for (const name of samples) {
     const dom = H.parseBlocksXml(xml);
     const stubbed = H.defineStubsFor(dom);
     const preserved = H.preserveUnknownFields(dom);
-    const workspace = Blockly.inject('blockly', { renderer: 'zelos' });
+    const workspace = Blockly.inject('blockly', { renderer: 'pxt' });
     Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
     const out = H.serializeWorkspace(workspace);
     const blockCount = workspace.getAllBlocks(false).length;

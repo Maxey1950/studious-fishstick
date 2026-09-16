@@ -22,6 +22,23 @@ const KIND_ENUM = 6;
 
 const DEFAULT_COLOUR = '#7B8794';
 
+/**
+ * MakeCode's colours for the categories pxt supplies itself. Arcade namespaces
+ * that extend one of these (`loops` adds `pause` and `forever`) carry no colour
+ * in the metadata, and would otherwise fall back to grey — which is visibly
+ * wrong next to the green loop blocks they sit among. Values confirmed against
+ * a running Arcade editor.
+ */
+const BUILTIN_CATEGORY_COLOURS = {
+  loops: '#20BF6B',
+  logic: '#45AAF2',
+  variables: '#EC3B59',
+  math: '#A55EEA',
+  text: '#F5D547',
+  arrays: '#FF8F08',
+  functions: '#1446A0',
+};
+
 const target = JSON.parse(await readFile(join(root, '.arcade-cache', 'target.json'), 'utf8'));
 
 /** Every API symbol across all bundled packages, keyed by qualified name. */
@@ -158,7 +175,8 @@ function collectNamespaces(all) {
     found.set(qName, {
       name: qName,
       label: attrs.block ?? capitalize(qName),
-      colour: attrs.color ?? DEFAULT_COLOUR,
+      colour:
+        attrs.color ?? BUILTIN_CATEGORY_COLOURS[qName.toLowerCase()] ?? DEFAULT_COLOUR,
       icon: attrs.icon ?? '',
       weight: attrs.weight ?? 50,
       advanced: Boolean(attrs.advanced),
@@ -187,7 +205,11 @@ function buildBlocks(all, namespaceMap) {
 
     const namespaceName = attrs.blockNamespace ?? qName.split('.')[0];
     const namespace = namespaceMap.get(namespaceName);
-    const colour = attrs.color ?? namespace?.colour ?? DEFAULT_COLOUR;
+    const colour =
+      attrs.color ??
+      namespace?.colour ??
+      BUILTIN_CATEGORY_COLOURS[namespaceName.toLowerCase()] ??
+      DEFAULT_COLOUR;
 
     try {
       const block = defineBlock(qName, symbol, attrs, colour, all);

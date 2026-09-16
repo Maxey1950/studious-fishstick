@@ -1,6 +1,6 @@
 /** Messages exchanged between the extension host and the Blockly webview. */
 
-export type RendererName = 'geras' | 'thrasos' | 'zelos';
+export type RendererName = 'pxt' | 'zelos' | 'geras' | 'thrasos';
 
 /** Extension host -> webview. */
 export type HostMessage =

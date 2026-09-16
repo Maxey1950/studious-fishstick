@@ -2,7 +2,7 @@
   "name": "blocks-editor-web",
   "displayName": "Blocks Editor (.blocks)",
   "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "maxey1950",
   "license": "MIT",
   "engines": {
@@ -83,12 +83,19 @@
         "blocksEditor.renderer": {
           "type": "string",
           "enum": [
+            "pxt",
+            "zelos",
             "geras",
-            "thrasos",
-            "zelos"
+            "thrasos"
           ],
-          "default": "zelos",
-          "description": "Blockly renderer. 'zelos' most closely resembles MakeCode."
+          "default": "pxt",
+          "description": "Which renderer draws the blocks.",
+          "enumDescriptions": [
+            "MakeCode's own renderer, ported from pxt. Blocks get the exact geometry the Arcade editor draws.",
+            "Blockly’s rounded renderer, which pxt’s is derived from.",
+            "Blockly’s classic renderer.",
+            "Blockly’s thin renderer."
+          ]
         },
         "blocksEditor.engine": {
           "type": "string",

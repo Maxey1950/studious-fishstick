@@ -77,8 +77,8 @@
   var SyncState = class {
     constructor(options = DEFAULT_SYNC_OPTIONS) {
       this.options = options;
+      this.state = { lastLocalChangeMs: Number.NEGATIVE_INFINITY };
     }
-    state = { lastLocalChangeMs: Number.NEGATIVE_INFINITY };
     /** The editor reported a change (a `workspacesave` push). */
     onLocalChange(blocks, nowMs) {
       if (blocks === this.state.appliedRemote) {

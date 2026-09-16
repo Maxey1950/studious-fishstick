@@ -20,7 +20,8 @@ try {
 await rm(dest, { recursive: true, force: true });
 await mkdir(dest, { recursive: true });
 
-await cp(join(src, 'blockly.min.js'), join(dest, 'blockly.min.js'));
+// Only the media: Blockly itself is bundled into the webview script now, but
+// it still fetches these sprites and sounds at runtime by URL.
 await cp(join(src, 'media'), join(dest, 'media'), { recursive: true });
 await cp(join(src, 'LICENSE'), join(dest, 'LICENSE'));
 
