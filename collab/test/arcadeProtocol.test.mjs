@@ -21,8 +21,8 @@ const { outputFiles } = await build({
 const dir = await mkdtemp(join(tmpdir(), 'arcade-protocol-'));
 const modulePath = join(dir, 'arcadeProtocol.mjs');
 await writeFile(modulePath, outputFiles[0].text);
-const { handleEditorMessage, createProject, blocksOf, importProjectMessage } =
-  await import(modulePath);
+const { handleEditorMessage, createProject, blocksOf, importProjectMessage,
+  hasNoBlocks, ARCADE_EDITOR_URL } = await import(modulePath);
 
 let failures = 0;
 const check = (name, fn) => {
@@ -102,6 +102,23 @@ check('importproject carries the project', () => {
   assert.equal(message.type, 'pxthost');
   assert.equal(message.action, 'importproject');
   assert.equal(blocksOf(message.project), '<xml>blocks</xml>');
+});
+
+check('the editor is told its workspace is the host page', () => {
+  // ws=browser makes the editor use its own IndexedDB: it ignores the project
+  // we hand it, opens blank, and then saves that blank over the user's file.
+  assert.ok(ARCADE_EDITOR_URL.includes('ws=iframe'), 'must request the iframe workspace');
+  assert.ok(!ARCADE_EDITOR_URL.includes('ws=browser'), 'must never request browser storage');
+  assert.ok(ARCADE_EDITOR_URL.includes('controller=1'), 'must run in controller mode');
+});
+
+check('an empty workspace is recognised, so it is never saved over a file', () => {
+  assert.equal(hasNoBlocks('<xml xmlns="https://developers.google.com/blockly/xml"></xml>'), true);
+  // The exact shape a failed load produces: variables, no blocks.
+  assert.equal(hasNoBlocks(
+    '<xml><variables><variable id="a">i</variable></variables></xml>'), true);
+  assert.equal(hasNoBlocks('<xml><block type="pxt-on-start"></block></xml>'), false);
+  assert.equal(hasNoBlocks('<xml>\n  <BLOCK type="x"/>\n</xml>'), false, 'case-insensitive');
 });
 
 if (failures > 0) { console.error(`\n${failures} protocol test(s) failed.`); process.exit(1); }

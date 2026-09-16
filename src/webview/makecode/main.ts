@@ -16,6 +16,7 @@ import {
   blocksOf,
   createProject,
   handleEditorMessage,
+  hasNoBlocks,
   importProjectMessage,
   type ArcadeProject,
 } from '../../shared/arcadeProtocol';
@@ -31,6 +32,8 @@ let project: ArcadeProject = createProject('blocks', '');
 let sync = new SyncState(DEFAULT_SYNC_OPTIONS);
 let booted = false;
 let timer: number | undefined;
+/** The document as the extension last reported it, for the safety check below. */
+let documentBlocks = '';
 
 function post(message: WebviewMessage): void {
   vscodeApi.postMessage(message);
@@ -99,6 +102,18 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     case 'projectChanged': {
       const blocks = blocksOf(outcome.project);
+
+      // If the editor reports an empty workspace while the file has blocks in
+      // it, the editor failed to load the project rather than the user deleting
+      // everything. Saving that would destroy their work, so refuse.
+      if (hasNoBlocks(blocks) && !hasNoBlocks(documentBlocks)) {
+        showStatus(
+          'The MakeCode editor opened empty, so this file has NOT been changed. ' +
+            'Close and reopen it; if it keeps happening, switch blocksEditor.engine to "blockly".'
+        );
+        return;
+      }
+
       if (blocks) {
         // Keep every file the editor produced (main.ts, assets.json), not just
         // the blocks, so nothing it generated is thrown away on the next import.
@@ -121,6 +136,7 @@ window.addEventListener('message', (event: MessageEvent) => {
 function handleHostMessage(message: HostMessage): void {
   switch (message.type) {
     case 'init':
+      documentBlocks = message.xml;
       project = createProject('blocks', message.xml);
       sync = new SyncState(DEFAULT_SYNC_OPTIONS);
       sync.onRemoteChange(message.xml, Date.now());
@@ -137,6 +153,7 @@ function handleHostMessage(message: HostMessage): void {
       return;
 
     case 'update':
+      documentBlocks = message.xml;
       sync.onRemoteChange(message.xml, Date.now());
       if (sync.hasPendingRemote()) {
         showStatus('A change from someone else will apply when you pause…');

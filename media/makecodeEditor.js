@@ -1,7 +1,10 @@
 "use strict";
 (() => {
   // src/shared/arcadeProtocol.ts
-  var ARCADE_EDITOR_URL = "https://arcade.makecode.com/?controller=1&ws=browser&nocookiebanner=1";
+  var ARCADE_EDITOR_URL = "https://arcade.makecode.com/?controller=1&ws=iframe&nocookiebanner=1";
+  function hasNoBlocks(xml) {
+    return !/<block\b/i.test(xml);
+  }
   function handleEditorMessage(message, project2) {
     if (!message || typeof message !== "object" || message.type !== "pxteditor") {
       return { kind: "ignore" };
@@ -142,6 +145,7 @@
   var sync = new SyncState(DEFAULT_SYNC_OPTIONS);
   var booted = false;
   var timer;
+  var documentBlocks = "";
   function post(message) {
     vscodeApi.postMessage(message);
   }
@@ -193,6 +197,12 @@
         return;
       case "projectChanged": {
         const blocks = blocksOf(outcome.project);
+        if (hasNoBlocks(blocks) && !hasNoBlocks(documentBlocks)) {
+          showStatus(
+            'The MakeCode editor opened empty, so this file has NOT been changed. Close and reopen it; if it keeps happening, switch blocksEditor.engine to "blockly".'
+          );
+          return;
+        }
         if (blocks) {
           project = outcome.project;
           sync.onLocalChange(blocks, Date.now());
@@ -210,6 +220,7 @@
   function handleHostMessage(message) {
     switch (message.type) {
       case "init":
+        documentBlocks = message.xml;
         project = createProject("blocks", message.xml);
         sync = new SyncState(DEFAULT_SYNC_OPTIONS);
         sync.onRemoteChange(message.xml, Date.now());
@@ -223,6 +234,7 @@
         }
         return;
       case "update":
+        documentBlocks = message.xml;
         sync.onRemoteChange(message.xml, Date.now());
         if (sync.hasPendingRemote()) {
           showStatus("A change from someone else will apply when you pause\u2026");

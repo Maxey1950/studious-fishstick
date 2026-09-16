@@ -10,8 +10,24 @@
  * without a browser or a network.
  */
 
+/**
+ * `ws=iframe` is the important part: it tells the editor its workspace lives in
+ * the host page, so it asks us for the project. With `ws=browser` it uses its
+ * own IndexedDB instead, ignores the file, opens blank — and then saves that
+ * blank project back over the user's work.
+ */
 export const ARCADE_EDITOR_URL =
-  'https://arcade.makecode.com/?controller=1&ws=browser&nocookiebanner=1';
+  'https://arcade.makecode.com/?controller=1&ws=iframe&nocookiebanner=1';
+
+/**
+ * True when XML carries no blocks at all.
+ *
+ * Used as a safety check: an editor that failed to load its project reports an
+ * empty workspace, and writing that back would destroy the file.
+ */
+export function hasNoBlocks(xml: string): boolean {
+  return !/<block\b/i.test(xml);
+}
 
 /** The file map of a MakeCode project. `main.blocks` is the block XML. */
 export type ProjectText = Record<string, string>;
