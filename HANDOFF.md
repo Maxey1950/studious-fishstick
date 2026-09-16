@@ -283,6 +283,38 @@ Suggested shape if pursued: keep both engines behind a setting
 Blockly path stays the default and the embedded editor is opt-in for fidelity.
 The provider, `textDiff.ts` and the write-back path are engine-agnostic already.
 
+### Hosting constraints (the real blocker)
+
+The target user is a student on a school-managed device running **Securly**,
+which filters the device everywhere, not just on the school network. Confirmed
+blocked: **GitHub, GitHub Pages, Cloudflare `workers.dev`, Google Apps Script
+(`script.google.com`), and claude.ai** (so a Claude Artifact cannot host it
+either). Confirmed allowed: **arcade.makecode.com** — it is used in class.
+
+**What makecode.com can and cannot do as a backend** (probed 2026-09-16):
+
+| Operation | Result |
+| --- | --- |
+| `POST /api/scripts` (create a share, anonymous) | works — returns `{id, shortid}` |
+| `GET /api/<shortid>/text` | works — returns the file map |
+| `POST /api/<shortid>` (update in place) | **403** |
+| `GET /api/scripts`, `?q=`, `/api/search`, `/api/list` | **404 — no such api** |
+
+So MakeCode is a free, allowed, **append-only blob store addressable only by an
+id you already hold**. Shares are immutable and undiscoverable: ids are
+server-assigned and random, so they cannot be derived from a room name.
+
+The consequence worth remembering: **the project payload can live on MakeCode
+for free**, so the only external dependency is a single mutable value — roughly
+12 bytes naming the current share id. Any host that can store and serve one
+string suffices; it does not need to hold the project. A chain does not work
+either (links can only point backwards, and finding the head is the problem).
+
+If a host is ever allowed, that is the whole integration: write the project to
+MakeCode, write the returned id to the mutable cell, and have peers poll the
+cell. Prefer plain HTTPS polling over WebSockets or WebRTC — school filters
+commonly block both.
+
 ### Considered and rejected: switching to pxt-blockly
 
 Asked whether to rebuild on Microsoft's Blockly fork (`pxt-blockly`) instead of
