@@ -67,6 +67,37 @@ Three things make that smooth rather than janky:
 - Live Share must be installed by each participant **in desktop VS Code** to host
   a session. Browser participants can join a session in vscode.dev.
 
+## Two editors
+
+`blocksEditor.engine` chooses what draws a `.blocks` file:
+
+- **`makecode`** (default) embeds the genuine MakeCode Arcade editor — every
+  block, the image and tilemap editors, the simulator. It needs
+  `arcade.makecode.com` to be reachable.
+- **`blockly`** uses the editor built into this extension, described below. It
+  needs no network at all.
+
+Either way the `.blocks` file stays the source of truth, so Live Share
+collaboration works the same with both.
+
+### Embedding under a cross-origin embedder policy
+
+vscode.dev serves its pages with `Cross-Origin-Embedder-Policy: require-corp`.
+Under that policy a cross-origin iframe must assert COEP itself, and MakeCode
+sends only `Cross-Origin-Resource-Policy`, so a plain iframe is **refused** —
+though it works in desktop VS Code, which sets no such policy.
+
+The editor is therefore embedded in an **`<iframe credentialless>`**, the
+attribute Chrome provides so a require-corp document can embed cross-origin
+content lacking COEP: the frame loads without credentials, in ephemeral storage.
+Nothing is lost, because the project reaches the editor over MakeCode's
+controller protocol rather than through its cookies or its own storage.
+
+`blocksEditor.embedElement` can select `iframe`, `object` or `embed` instead.
+`object` and `embed` are refused by current Chrome under the same policy; a plain
+`iframe` is useful on desktop, and on iOS, where the browser is WebKit (so
+`credentialless` is ignored) and COEP is enforced differently.
+
 ## MakeCode Arcade support
 
 The editor ships Arcade's actual block library: **493 blocks and 69 dropdowns

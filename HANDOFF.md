@@ -315,10 +315,39 @@ MakeCode, write the returned id to the mutable cell, and have peers poll the
 cell. Prefer plain HTTPS polling over WebSockets or WebRTC — school filters
 commonly block both.
 
-### Conclusion: not deployable to the target device
+### Resolved: the real Arcade editor runs on the target device
 
-After testing every available route, **real-time collaboration cannot be
-delivered to the user's school-managed device.** Do not re-run this search.
+**This works.** The extension embeds the genuine MakeCode Arcade editor in its
+webview, on vscode.dev, on the school-managed Chromebook. No hosting, no
+allowlist, no account: every domain involved (vscode.dev, arcade.makecode.com,
+Live Share) was already permitted.
+
+The obstacle was **`Cross-Origin-Embedder-Policy: require-corp`**, which
+vscode.dev and insiders.vscode.dev both set. Under it a cross-origin iframe must
+assert COEP itself; MakeCode sends only `Cross-Origin-Resource-Policy:
+cross-origin`, so the editor was refused. Desktop VS Code sets no such policy,
+which is why it worked there and nowhere else.
+
+What finally worked is **`<iframe credentialless>`** — the attribute Chrome added
+so a require-corp document may embed cross-origin content that lacks COEP, by
+loading it without credentials and with ephemeral storage. That trade is free
+here: the controller protocol hands the editor its project, so it never needs
+its own cookies or storage.
+
+Things tried first that do **not** work, so they are not worth repeating:
+`<object>` and `<embed>` (current Chrome applies the same rule), and looking for
+a vscode.dev deployment without the policy (insiders sets it too). Note also that
+Chrome on iOS is WebKit, so `credentialless` is ignored there — a plain `iframe`
+may work instead, since WebKit enforces COEP differently.
+
+### Superseded: the earlier conclusion that it was not deployable
+
+**This section is kept for the record; it was wrong.** It concluded that nothing
+could reach the device, because at the time every route needed third-party
+hosting. The answer turned out to need no hosting at all: the extension is the
+host. See the section above.
+
+The filter findings below are still accurate and worth keeping.
 
 Blocked on the device (Securly, filters at home too): GitHub, GitHub Pages,
 `workers.dev`, `script.google.com`, claude.ai, `netlify.app`, `vercel.app`.
