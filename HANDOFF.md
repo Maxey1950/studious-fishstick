@@ -225,6 +225,15 @@ The user wants **the genuine Arcade editor**, not a recreation, still editing th
 `.blocks` file so Live Share works. Researched 2026-09-16 — the protocol exists
 and supports it.
 
+The embed URL is the site **root with query parameters** —
+`https://arcade.makecode.com/?controller=1&ws=browser`. There is no
+`/index.html`; that path 404s.
+
+**Framing is permitted.** The response carries no `X-Frame-Options`, no
+`Content-Security-Policy` with `frame-ancestors`, and no `<meta>` CSP, so
+MakeCode does not block being embedded in an iframe. That was the largest
+structural risk and it is cleared.
+
 MakeCode's **controller embedding** (`?controller=1&ws=browser`) speaks a
 postMessage protocol, typed in `pxt-core/localtypings/pxteditor.d.ts`:
 
@@ -241,8 +250,9 @@ document's `.blocks`, and on `workspacesave` write `project.text['main.blocks']`
 back through the same `WorkspaceEdit` path the Blockly build already uses — so
 Live Share replication is unchanged.
 
-**Unverified.** Whether the editor renders and completes the handshake inside a
-VS Code webview iframe could not be tested in the build sandbox: outbound HTTPS
+**Still unverified:** whether the controller *handshake* completes (the headers
+only prove the page may be framed). This could not be tested in the build
+sandbox: outbound HTTPS
 goes through a proxy whose CA Chromium does not trust, `certutil` is not
 installable, and disabling TLS verification is prohibited. `curl` reaches
 MakeCode; a browser in that sandbox cannot.
