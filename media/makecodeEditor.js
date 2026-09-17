@@ -38,6 +38,9 @@
   function importProjectMessage(project2) {
     return { type: "pxteditor", action: "importproject", project: project2 };
   }
+  function editorCommand(action) {
+    return { type: "pxteditor", action };
+  }
   function createProject(name, blocks) {
     return {
       header: {
@@ -326,29 +329,41 @@
     const workspace = reach2.workspace;
     const Blockly = blocklyOf(view);
     if (!workspace || !Blockly?.Xml) {
-      return false;
+      return { mode: "import", detail: workspace ? "no Blockly.Xml" : "no workspace" };
     }
+    let dom;
     try {
-      const dom = Blockly.utils.xml.textToDom(xml);
-      const scroll = { x: workspace.scrollX, y: workspace.scrollY, scale: workspace.scale };
-      Blockly.Events.disable();
-      let merged = false;
-      try {
-        merged = mergeIntoWorkspace(Blockly, workspace, dom);
-        if (!merged) {
-          Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
-        }
-      } finally {
-        Blockly.Events.enable();
-      }
-      if (!merged) {
-        workspace.setScale?.(scroll.scale);
-        workspace.scroll?.(scroll.x, scroll.y);
-      }
-      return true;
-    } catch {
-      return false;
+      dom = Blockly.utils.xml.textToDom(xml);
+    } catch (error) {
+      return { mode: "import", detail: `unparseable XML: ${describe(error)}` };
     }
+    Blockly.Events.disable();
+    let merged;
+    try {
+      merged = mergeIntoWorkspace(Blockly, workspace, dom);
+    } catch (error) {
+      merged = `merge threw: ${describe(error)}`;
+    } finally {
+      Blockly.Events.enable();
+    }
+    if (merged === void 0) {
+      return { mode: "merge", detail: "changed blocks only" };
+    }
+    const scroll = { x: workspace.scrollX, y: workspace.scrollY, scale: workspace.scale };
+    Blockly.Events.disable();
+    try {
+      Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
+    } catch (error) {
+      return { mode: "import", detail: `reload threw: ${describe(error)}` };
+    } finally {
+      Blockly.Events.enable();
+    }
+    workspace.setScale?.(scroll.scale);
+    workspace.scroll?.(scroll.x, scroll.y);
+    return { mode: "canvas", detail: merged };
+  }
+  function describe(error) {
+    return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   }
   function mergeIntoWorkspace(Blockly, workspace, dom) {
     const incoming = [];
@@ -362,10 +377,13 @@
       }
     }
     if (!incoming.length && workspace.getTopBlocks(false).length) {
-      return false;
+      return "incoming XML has no blocks";
     }
     if (variables) {
-      Blockly.Xml.domToVariables(variables, workspace);
+      try {
+        Blockly.Xml.domToVariables(variables, workspace);
+      } catch {
+      }
     }
     const unmatched = /* @__PURE__ */ new Map();
     for (const block of workspace.getTopBlocks(false)) {
@@ -411,7 +429,7 @@
     for (const element of rebuild) {
       Blockly.Xml.domToBlock(element, workspace);
     }
-    return true;
+    return void 0;
   }
   function canonicalize(element, ignoreId = false) {
     const attributes = Array.from(element.attributes).filter((attribute) => !(ignoreId && attribute.name === "id")).map((attribute) => {
@@ -467,7 +485,7 @@
     try {
       loadEditor(await createBlobEditorUrl());
     } catch (error) {
-      showStatus(`Same-origin load failed (${describe(error)}); using the standard editor.`);
+      showStatus(`Same-origin load failed (${describe2(error)}); using the standard editor.`);
       loadEditor(ARCADE_EDITOR_URL);
     }
   }
@@ -557,6 +575,16 @@
         return;
     }
   }
+  var simulatorTimer;
+  function scheduleSimulatorRestart() {
+    if (simulatorTimer !== void 0) {
+      clearTimeout(simulatorTimer);
+    }
+    simulatorTimer = setTimeout(() => {
+      simulatorTimer = void 0;
+      frame.contentWindow?.postMessage(editorCommand("restartsimulator"), "*");
+    }, 700);
+  }
   function applyRemote(blocks) {
     if (reach?.sameOrigin && isWorkspaceBusy(reach)) {
       deferredApply = blocks;
@@ -575,13 +603,15 @@
     deferredApply = void 0;
     project = withBlocks(project, blocks);
     probeOnce();
-    const appliedDirectly = reach?.sameOrigin === true && applyBlocksDirectly(reach, frame.contentWindow, blocks);
-    if (appliedDirectly) {
-      lastPolled = readBlocksDirectly(reach, frame.contentWindow) ?? blocks;
-    } else {
+    const applied = reach?.sameOrigin ? applyBlocksDirectly(reach, frame.contentWindow, blocks) : { mode: "import", detail: "cross-origin" };
+    console.log(`[blocks] applied via ${applied.mode}: ${applied.detail}`);
+    if (applied.mode === "import") {
       frame.contentWindow?.postMessage(importProjectMessage(project), "*");
       settlingUntil = Date.now() + SETTLE_MS;
       lastPolled = blocks;
+    } else {
+      lastPolled = readBlocksDirectly(reach, frame.contentWindow) ?? blocks;
+      scheduleSimulatorRestart();
     }
     showStatus(void 0);
   }
@@ -666,7 +696,7 @@
       post({ type: "editorUnavailable" });
     }
   }, 3e4);
-  function describe(error) {
+  function describe2(error) {
     return error instanceof Error ? error.message : String(error);
   }
   post({ type: "ready" });

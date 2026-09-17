@@ -15,6 +15,17 @@
  */
 import { ARCADE_EDITOR_URL } from '../../shared/arcadeProtocol';
 
+/**
+ * How a peer's change reached the editor.
+ *
+ * `merge` touched only the blocks that changed; `canvas` rebuilt the blocks but
+ * left the editor standing; `import` is the last resort that reloads everything.
+ */
+export interface ApplyResult {
+  mode: 'merge' | 'canvas' | 'import';
+  detail: string;
+}
+
 /** What a same-origin probe found inside the editor. */
 export interface EditorReach {
   sameOrigin: boolean;
@@ -323,41 +334,60 @@ export function isWorkspaceBusy(reach: EditorReach): boolean {
  * removed. In the usual case — someone moved one block — exactly one block is
  * rebuilt and the rest of the canvas never flickers.
  *
- * Falls back to a wholesale load only when the XML cannot be matched up at all.
+ * Falls back to a wholesale canvas load when the XML cannot be matched up, and
+ * reports which route it took so a reload is never a mystery.
  */
-export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string): boolean {
+export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string): ApplyResult {
   const workspace = reach.workspace;
   const Blockly = blocklyOf(view);
   if (!workspace || !Blockly?.Xml) {
-    return false;
+    return { mode: 'import', detail: workspace ? 'no Blockly.Xml' : 'no workspace' };
   }
 
+  let dom: Element;
   try {
-    const dom = Blockly.utils.xml.textToDom(xml);
-    const scroll = { x: workspace.scrollX, y: workspace.scrollY, scale: workspace.scale };
-
-    // Events stay off throughout: each disposal and rebuild would otherwise be
-    // reported as the user's own edit and sent straight back out.
-    Blockly.Events.disable();
-    let merged = false;
-    try {
-      merged = mergeIntoWorkspace(Blockly, workspace, dom);
-      if (!merged) {
-        Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
-      }
-    } finally {
-      Blockly.Events.enable();
-    }
-
-    if (!merged) {
-      // Only the wholesale path loses the viewport; a merge never moves it.
-      workspace.setScale?.(scroll.scale);
-      workspace.scroll?.(scroll.x, scroll.y);
-    }
-    return true;
-  } catch {
-    return false;
+    dom = Blockly.utils.xml.textToDom(xml);
+  } catch (error) {
+    return { mode: 'import', detail: `unparseable XML: ${describe(error)}` };
   }
+
+  // Events stay off throughout: each disposal and rebuild would otherwise be
+  // reported as the user's own edit and sent straight back out.
+  Blockly.Events.disable();
+  let merged: string | undefined;
+  try {
+    merged = mergeIntoWorkspace(Blockly, workspace, dom);
+  } catch (error) {
+    merged = `merge threw: ${describe(error)}`;
+  } finally {
+    Blockly.Events.enable();
+  }
+
+  if (merged === undefined) {
+    return { mode: 'merge', detail: 'changed blocks only' };
+  }
+
+  // The merge could not be trusted, but the workspace is still right here: a
+  // wholesale load rebuilds the canvas, which flashes, and is still enormously
+  // better than importproject tearing down the editor and the simulator with
+  // it. Reaching for a reload because a merge went wrong would give up the
+  // whole reason for loading same-origin.
+  const scroll = { x: workspace.scrollX, y: workspace.scrollY, scale: workspace.scale };
+  Blockly.Events.disable();
+  try {
+    Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
+  } catch (error) {
+    return { mode: 'import', detail: `reload threw: ${describe(error)}` };
+  } finally {
+    Blockly.Events.enable();
+  }
+  workspace.setScale?.(scroll.scale);
+  workspace.scroll?.(scroll.x, scroll.y);
+  return { mode: 'canvas', detail: merged };
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
 /**
@@ -369,13 +399,17 @@ export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string):
  * them; everything left over is matched on content, so a block that merely
  * lacks an id is recognized as itself rather than torn down and rebuilt.
  *
- * Returns false only if nothing in the XML could be read as blocks, which means
- * a wholesale load is the only correct answer.
+ * Returns undefined when it merged, or the reason it would not — the caller
+ * turns that into a wholesale canvas load.
  *
  * Exported so the matching can be tested against real Arcade files, where
  * getting it wrong means rebuilding a canvas that did not change.
  */
-export function mergeIntoWorkspace(Blockly: any, workspace: any, dom: Element): boolean {
+export function mergeIntoWorkspace(
+  Blockly: any,
+  workspace: any,
+  dom: Element
+): string | undefined {
   const incoming: Element[] = [];
   let variables: Element | undefined;
 
@@ -389,13 +423,20 @@ export function mergeIntoWorkspace(Blockly: any, workspace: any, dom: Element): 
   }
   if (!incoming.length && workspace.getTopBlocks(false).length) {
     // An empty document against a full canvas is not a merge worth guessing at.
-    return false;
+    return 'incoming XML has no blocks';
   }
 
   // Variables first: a block referring to one created elsewhere cannot be built
-  // until the workspace knows about it.
+  // until the workspace knows about it. Guarded on its own, because every real
+  // Arcade file has a <variables> block and pxt's bundled Blockly need not
+  // spell this helper the way the standalone one does — letting it throw here
+  // would have failed the whole merge on exactly the files that matter.
   if (variables) {
-    Blockly.Xml.domToVariables(variables, workspace);
+    try {
+      Blockly.Xml.domToVariables(variables, workspace);
+    } catch {
+      // Blocks carry their variable's id and name inline, so this is survivable.
+    }
   }
 
   const unmatched = new Map<string, any>();
@@ -455,7 +496,7 @@ export function mergeIntoWorkspace(Blockly: any, workspace: any, dom: Element): 
     Blockly.Xml.domToBlock(element, workspace);
   }
 
-  return true;
+  return undefined;
 }
 
 /**

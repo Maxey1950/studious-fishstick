@@ -85,7 +85,7 @@ const samples = {
 for (const [name, xml] of Object.entries(samples)) {
   test(`${name}: identical blocks are left standing`, () => {
     const { Blockly, workspace, disposed, built } = harness(xml);
-    assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(xml)), true);
+    assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(xml)), undefined);
     assert.deepEqual(disposed, [], 'nothing should have been disposed');
     assert.deepEqual(built, [], 'nothing should have been rebuilt');
   });
@@ -96,7 +96,7 @@ for (const [name, xml] of Object.entries(samples)) {
     // compare meaning, not text.
     const respelled = xml.replace(/<block type="([^"]+)" x="([^"]+)" y="([^"]+)"/g,
       '<block y="$3" x="$2" type="$1"');
-    assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(respelled)), true);
+    assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(respelled)), undefined);
     assert.deepEqual(disposed, []);
     assert.deepEqual(built, []);
   });
@@ -110,7 +110,7 @@ test('hello: a changed block is the only one rebuilt', () => {
   const changed = xml.replace('>2<', '>3<');
 
   const { Blockly, workspace, disposed, built } = harness(xml);
-  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(changed)), true);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(changed)), undefined);
   assert.equal(disposed.length, 1);
   assert.equal(disposed[0].id, 'two');
   assert.equal(built.length, 1);
@@ -126,7 +126,7 @@ test('a deleted block is removed and nothing else touched', () => {
     `<block type="a" id="one" x="0" y="0"/></xml>`;
 
   const { Blockly, workspace, disposed, built } = harness(xml);
-  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(without)), true);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(without)), undefined);
   assert.deepEqual(disposed.map((block) => block.id), ['two']);
   assert.deepEqual(built, []);
 });
@@ -139,7 +139,7 @@ test('an id-less incoming block matches the canvas block it describes', () => {
     `<block type="a" x="0" y="0"/></xml>`;
 
   const { Blockly, workspace, disposed, built } = harness(onCanvas);
-  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(fromFile)), true);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(fromFile)), undefined);
   assert.deepEqual(disposed, [], 'a missing id is not a different block');
   assert.deepEqual(built, []);
 });
@@ -152,7 +152,7 @@ test('an added block is built without disturbing the others', () => {
     `<block type="b" id="two" x="0" y="80"/></xml>`;
 
   const { Blockly, workspace, disposed, built } = harness(before);
-  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(after)), true);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(after)), undefined);
   assert.deepEqual(disposed, []);
   assert.deepEqual(built.map((element) => element.getAttribute('id')), ['two']);
 });
@@ -162,5 +162,19 @@ test('an empty document against a full canvas refuses to merge', () => {
     `<block type="a" id="one" x="0" y="0"/></xml>`;
   const { Blockly, workspace } = harness(xml);
   const empty = parse(`<xml xmlns="https://developers.google.com/blockly/xml"></xml>`);
-  assert.equal(mergeIntoWorkspace(Blockly, workspace, empty), false);
+  assert.match(mergeIntoWorkspace(Blockly, workspace, empty), /no blocks/);
+});
+
+test('a Blockly that cannot load variables still merges the blocks', () => {
+  // Every real Arcade file opens with a <variables> block. If loading them
+  // threw, the whole merge used to fail and the change fell back to
+  // importproject — a full editor reload on exactly the common case.
+  const xml = samples.arcade;
+  const { Blockly, workspace, disposed, built } = harness(xml);
+  Blockly.Xml.domToVariables = () => {
+    throw new TypeError('domToVariables is not a function');
+  };
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(xml)), undefined);
+  assert.deepEqual(disposed, []);
+  assert.deepEqual(built, []);
 });

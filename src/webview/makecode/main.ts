@@ -16,6 +16,7 @@ import {
   blocksOf,
   createProject,
   handleEditorMessage,
+  editorCommand,
   hasNoBlocks,
   importProjectMessage,
   withBlocks,
@@ -214,6 +215,23 @@ function pump(): void {
 }
 
 /**
+ * Restarts the simulator a moment after the last applied change.
+ *
+ * Debounced because a burst of incoming changes should cost one restart, not
+ * one per block.
+ */
+let simulatorTimer: number | undefined;
+function scheduleSimulatorRestart(): void {
+  if (simulatorTimer !== undefined) {
+    clearTimeout(simulatorTimer);
+  }
+  simulatorTimer = setTimeout(() => {
+    simulatorTimer = undefined;
+    frame.contentWindow?.postMessage(editorCommand('restartsimulator'), '*');
+  }, 700) as unknown as number;
+}
+
+/**
  * Puts a peer's blocks into the editor.
  *
  * Deferred while a block is in the user's hand: applying mid-drag would dispose
@@ -245,11 +263,22 @@ function applyRemote(blocks: string): void {
   // Same-origin lets the change go straight into the workspace, leaving the
   // editor, toolbox and simulator standing. Otherwise importproject is the
   // only route in, and it rebuilds all of them.
-  const appliedDirectly =
-    reach?.sameOrigin === true &&
-    applyBlocksDirectly(reach, frame.contentWindow as unknown, blocks);
+  const applied = reach?.sameOrigin
+    ? applyBlocksDirectly(reach, frame.contentWindow as unknown, blocks)
+    : ({ mode: 'import', detail: 'cross-origin' } as const);
 
-  if (appliedDirectly) {
+  // Say which route the change took. A reload is the thing we are trying to
+  // avoid, so when one happens it should be possible to read why rather than
+  // guess at it.
+  console.log(`[blocks] applied via ${applied.mode}: ${applied.detail}`);
+
+  if (applied.mode === 'import') {
+    frame.contentWindow?.postMessage(importProjectMessage(project), '*');
+    // Only the import route needs a settling window; applying to the workspace
+    // directly does not make the editor re-save.
+    settlingUntil = Date.now() + SETTLE_MS;
+    lastPolled = blocks;
+  } else {
     // What the workspace now serializes to is not byte-for-byte what arrived —
     // Blockly spells the same blocks its own way. Remembering the arriving text
     // would make the very next poll read a difference, call it a local edit and
@@ -257,12 +286,10 @@ function applyRemote(blocks: string): void {
     // itself every few hundred milliseconds. Remember what the workspace
     // actually says instead.
     lastPolled = readBlocksDirectly(reach!, frame.contentWindow as unknown) ?? blocks;
-  } else {
-    frame.contentWindow?.postMessage(importProjectMessage(project), '*');
-    // Only the import route needs a settling window; applying to the workspace
-    // directly does not make the editor re-save.
-    settlingUntil = Date.now() + SETTLE_MS;
-    lastPolled = blocks;
+    // Blockly's events were off while the blocks went in, so the editor does not
+    // know its code changed and the simulator is still running the old program.
+    // Ask it to start again, once the changes stop arriving.
+    scheduleSimulatorRestart();
   }
 
   showStatus(undefined);

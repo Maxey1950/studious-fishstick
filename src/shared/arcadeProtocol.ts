@@ -120,6 +120,17 @@ export function importProjectMessage(project: ArcadeProject): Record<string, unk
   return { type: 'pxteditor', action: 'importproject', project };
 }
 
+/**
+ * A bare command for the editor, for the actions that carry no payload.
+ *
+ * `restartsimulator` is the one that matters here: blocks applied straight into
+ * the workspace go in with Blockly's events switched off, so the editor never
+ * learns its program changed and the simulator keeps running the old one.
+ */
+export function editorCommand(action: string): Record<string, unknown> {
+  return { type: 'pxteditor', action };
+}
+
 /** A minimal Arcade project around a `.blocks` document. */
 export function createProject(name: string, blocks: string): ArcadeProject {
   return {
