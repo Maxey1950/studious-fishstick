@@ -15,6 +15,8 @@
  * without a browser or a network.
  */
 
+import { withDeclaredStubs } from './projectFiles';
+
 /**
  * `ws=iframe` is the important part: it tells the editor its workspace lives in
  * the host page, so it asks us for the project. With `ws=browser` it uses its
@@ -84,7 +86,14 @@ export function handleEditorMessage(
       // A response stays on the host channel and echoes the request id.
       return {
         kind: 'reply',
-        message: { type: 'pxthost', id: message.id, success: true, projects: [project] },
+        message: {
+          type: 'pxthost',
+          id: message.id,
+          success: true,
+          // Every file the project declares has to be there, or it does not
+          // build and there is nothing to run.
+          projects: [withDeclaredStubs(project)],
+        },
       };
 
     case 'newproject':
@@ -92,7 +101,14 @@ export function handleEditorMessage(
       // keeps it from replacing the file with a blank one.
       return {
         kind: 'reply',
-        message: { type: 'pxthost', id: message.id, success: true, projects: [project] },
+        message: {
+          type: 'pxthost',
+          id: message.id,
+          success: true,
+          // Every file the project declares has to be there, or it does not
+          // build and there is nothing to run.
+          projects: [withDeclaredStubs(project)],
+        },
       };
 
     case 'workspacereset':
@@ -117,7 +133,7 @@ export function handleEditorMessage(
 /** Builds the message that loads a project into the editor. Host-to-editor
  * commands travel on the `pxteditor` channel. */
 export function importProjectMessage(project: ArcadeProject): Record<string, unknown> {
-  return { type: 'pxteditor', action: 'importproject', project };
+  return { type: 'pxteditor', action: 'importproject', project: withDeclaredStubs(project) };
 }
 
 /**

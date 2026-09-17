@@ -1,5 +1,81 @@
 "use strict";
 (() => {
+  // src/shared/projectFiles.ts
+  var SHARED_FILES = [
+    "pxt.json",
+    "assets.json",
+    "main.ts",
+    // Generated from assets.json, but real files in a project on disk, and
+    // declared in pxt.json — which makes them the compiler's business. A project
+    // that lists a file it does not have fails to build at all.
+    "images.g.ts",
+    "tilemap.g.ts"
+  ];
+  function isShared(name) {
+    return SHARED_FILES.includes(name);
+  }
+  function sharedFiles(text) {
+    const files = {};
+    for (const name of SHARED_FILES) {
+      const content = text[name];
+      if (typeof content === "string") {
+        files[name] = content;
+      }
+    }
+    return files;
+  }
+  function changedFiles(previous, next) {
+    const changed = {};
+    for (const [name, content] of Object.entries(next)) {
+      if (!isShared(name)) {
+        continue;
+      }
+      const before = previous[name];
+      if (content === before || isEmpty(content)) {
+        continue;
+      }
+      changed[name] = content;
+    }
+    return changed;
+  }
+  function isEmpty(content) {
+    return content === void 0 || content.trim() === "";
+  }
+  function withFiles(project2, files) {
+    const text = { ...project2.text };
+    for (const [name, content] of Object.entries(files)) {
+      if (isShared(name)) {
+        text[name] = content;
+      }
+    }
+    return { ...project2, text };
+  }
+  function withDeclaredStubs(project2) {
+    const config = project2.text["pxt.json"];
+    if (config === void 0) {
+      return project2;
+    }
+    let declared;
+    try {
+      declared = JSON.parse(config).files;
+    } catch {
+      return project2;
+    }
+    if (!Array.isArray(declared)) {
+      return project2;
+    }
+    const text = { ...project2.text };
+    let added = false;
+    for (const entry of declared) {
+      const name = String(entry);
+      if (text[name] === void 0) {
+        text[name] = "";
+        added = true;
+      }
+    }
+    return added ? { ...project2, text } : project2;
+  }
+
   // src/shared/arcadeProtocol.ts
   var ARCADE_EDITOR_URL = "https://arcade.makecode.com/?controller=1&ws=iframe&nocookiebanner=1";
   function hasNoBlocks(xml) {
@@ -13,12 +89,26 @@
       case "workspacesync":
         return {
           kind: "reply",
-          message: { type: "pxthost", id: message.id, success: true, projects: [project2] }
+          message: {
+            type: "pxthost",
+            id: message.id,
+            success: true,
+            // Every file the project declares has to be there, or it does not
+            // build and there is nothing to run.
+            projects: [withDeclaredStubs(project2)]
+          }
         };
       case "newproject":
         return {
           kind: "reply",
-          message: { type: "pxthost", id: message.id, success: true, projects: [project2] }
+          message: {
+            type: "pxthost",
+            id: message.id,
+            success: true,
+            // Every file the project declares has to be there, or it does not
+            // build and there is nothing to run.
+            projects: [withDeclaredStubs(project2)]
+          }
         };
       case "workspacereset":
         return { kind: "reply", message: { type: "pxthost", id: message.id, success: true } };
@@ -36,7 +126,7 @@
     }
   }
   function importProjectMessage(project2) {
-    return { type: "pxteditor", action: "importproject", project: project2 };
+    return { type: "pxteditor", action: "importproject", project: withDeclaredStubs(project2) };
   }
   function editorCommand(action) {
     return { type: "pxteditor", action };
@@ -84,48 +174,6 @@
       header: project2.header,
       text: { ...project2.text, "main.blocks": blocks }
     };
-  }
-
-  // src/shared/projectFiles.ts
-  var SHARED_FILES = ["pxt.json", "assets.json", "main.ts"];
-  function isShared(name) {
-    return SHARED_FILES.includes(name);
-  }
-  function sharedFiles(text) {
-    const files = {};
-    for (const name of SHARED_FILES) {
-      const content = text[name];
-      if (typeof content === "string") {
-        files[name] = content;
-      }
-    }
-    return files;
-  }
-  function changedFiles(previous, next) {
-    const changed = {};
-    for (const [name, content] of Object.entries(next)) {
-      if (!isShared(name)) {
-        continue;
-      }
-      const before = previous[name];
-      if (content === before || isEmpty(content)) {
-        continue;
-      }
-      changed[name] = content;
-    }
-    return changed;
-  }
-  function isEmpty(content) {
-    return content === void 0 || content.trim() === "";
-  }
-  function withFiles(project2, files) {
-    const text = { ...project2.text };
-    for (const [name, content] of Object.entries(files)) {
-      if (isShared(name)) {
-        text[name] = content;
-      }
-    }
-    return { ...project2, text };
   }
 
   // src/shared/sameBlocks.ts

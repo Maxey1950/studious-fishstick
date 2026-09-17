@@ -26,7 +26,8 @@ const { outputFiles } = await build({
 const dir = await mkdtemp(join(tmpdir(), 'files-'));
 const file = join(dir, 'projectFiles.mjs');
 await writeFile(file, outputFiles[0].text);
-const { changedFiles, sharedFiles, withFiles, withDeclaredFiles, isShared } = await import(file);
+const { changedFiles, sharedFiles, withFiles, withDeclaredFiles, withDeclaredStubs, isShared } =
+  await import(file);
 
 test('only the three project files are shared', () => {
   assert.equal(isShared('pxt.json'), true);
@@ -90,4 +91,50 @@ test('assets.json is declared in pxt.json or the editor ignores it', () => {
 test('an unparseable pxt.json is returned untouched', () => {
   assert.equal(withDeclaredFiles('not json', ['assets.json']), 'not json');
   assert.equal(withDeclaredFiles('', ['assets.json']), '');
+});
+
+test('generated asset files are shared', () => {
+  // They are declared in pxt.json, which makes them the compiler's business:
+  // a project listing a file it does not have fails to build at all.
+  assert.equal(isShared('images.g.ts'), true);
+  assert.equal(isShared('tilemap.g.ts'), true);
+});
+
+test('every declared file exists, even if empty', () => {
+  const project = {
+    header: {},
+    text: {
+      'main.blocks': '<xml/>',
+      'pxt.json': JSON.stringify({
+        files: ['main.blocks', 'main.ts', 'images.g.ts', 'tilemap.g.ts'],
+      }),
+    },
+  };
+  const stubbed = withDeclaredStubs(project);
+  assert.equal(stubbed.text['images.g.ts'], '');
+  assert.equal(stubbed.text['tilemap.g.ts'], '');
+  assert.equal(stubbed.text['main.ts'], '');
+  assert.equal(stubbed.text['main.blocks'], '<xml/>', 'existing files are untouched');
+});
+
+test('a project with nothing missing is returned as it was', () => {
+  const project = {
+    header: {},
+    text: { 'main.blocks': '<xml/>', 'pxt.json': JSON.stringify({ files: ['main.blocks'] }) },
+  };
+  assert.equal(withDeclaredStubs(project), project);
+});
+
+test('a project with no readable pxt.json is left alone', () => {
+  const noConfig = { header: {}, text: { 'main.blocks': '<xml/>' } };
+  assert.equal(withDeclaredStubs(noConfig), noConfig);
+  const broken = { header: {}, text: { 'pxt.json': 'not json' } };
+  assert.equal(withDeclaredStubs(broken), broken);
+});
+
+test('a stub never gets written back over a real file', () => {
+  // The stubs exist for the compiler; writing them to disk would replace the
+  // real generated code with nothing.
+  const known = { 'images.g.ts': 'namespace myImages {}' };
+  assert.deepEqual(changedFiles(known, { 'images.g.ts': '' }), {});
 });

@@ -23,10 +23,19 @@ export type ProjectText = Record<string, string>;
  * Deliberately a fixed list rather than everything the editor reports. The
  * editor's project also carries its own `.blocks` — which is the document, and
  * writing it as a sibling would give the same content two owners — and build
- * output that is regenerated anyway. Naming the three means a surprising entry
- * in a project cannot cause a file to appear in someone's folder.
+ * output that is regenerated anyway. Naming them means a surprising entry in a
+ * project cannot cause a file to appear in someone's folder.
  */
-export const SHARED_FILES = ['pxt.json', 'assets.json', 'main.ts'] as const;
+export const SHARED_FILES = [
+  'pxt.json',
+  'assets.json',
+  'main.ts',
+  // Generated from assets.json, but real files in a project on disk, and
+  // declared in pxt.json — which makes them the compiler's business. A project
+  // that lists a file it does not have fails to build at all.
+  'images.g.ts',
+  'tilemap.g.ts',
+] as const;
 
 export function isShared(name: string): boolean {
   return (SHARED_FILES as readonly string[]).includes(name);
@@ -111,4 +120,45 @@ export function withDeclaredFiles(config: string, names: string[]): string {
     return config;
   }
   return JSON.stringify({ ...parsed, files: [...declared, ...missing] }, null, 4);
+}
+
+/**
+ * Makes sure the project has every file it says it has.
+ *
+ * MakeCode compiles exactly the list in `pxt.json`, and a declared file that is
+ * not there is not ignored — it is a build error, `TS6053: File not found`, and
+ * the project produces nothing at all: no generated code, and no simulator to
+ * run it. Real projects declare `images.g.ts` and `tilemap.g.ts`, which the
+ * editor writes from `assets.json` and which are therefore missing for anyone
+ * holding a project assembled from a `.blocks` file alone.
+ *
+ * Missing files are supplied empty, which compiles cleanly and which the editor
+ * overwrites with the real contents as soon as it regenerates them.
+ */
+export function withDeclaredStubs<T extends { text: ProjectText }>(project: T): T {
+  const config = project.text['pxt.json'];
+  if (config === undefined) {
+    return project;
+  }
+
+  let declared: unknown;
+  try {
+    declared = (JSON.parse(config) as { files?: unknown }).files;
+  } catch {
+    return project;
+  }
+  if (!Array.isArray(declared)) {
+    return project;
+  }
+
+  const text = { ...project.text };
+  let added = false;
+  for (const entry of declared) {
+    const name = String(entry);
+    if (text[name] === undefined) {
+      text[name] = '';
+      added = true;
+    }
+  }
+  return added ? { ...project, text } : project;
 }
