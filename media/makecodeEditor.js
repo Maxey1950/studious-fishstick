@@ -169,6 +169,29 @@
   function controllerShim() {
     return `<script>(function () {
   var started = Date.now();
+
+  // Catch the workspace as it is created. MakeCode bundles Blockly as a webpack
+  // module, so the global object does not answer getMainWorkspace and there is
+  // no registry to ask afterwards \u2014 but whatever creates the canvas has to call
+  // inject, and wrapping that captures the workspace it returns.
+  var injectTimer = setInterval(function () {
+    var B = window.Blockly;
+    if (B && B.inject && !B.__arcadeWrapped) {
+      try {
+        var nativeInject = B.inject;
+        B.inject = function () {
+          var workspace = nativeInject.apply(this, arguments);
+          try { window.__arcadeWorkspace = workspace; } catch (e) {}
+          return workspace;
+        };
+        B.__arcadeWrapped = true;
+      } catch (e) {}
+      clearInterval(injectTimer);
+    } else if (Date.now() - started > 15000) {
+      clearInterval(injectTimer);
+    }
+  }, 2);
+
   var timer = setInterval(function () {
     var shell = window.pxt && window.pxt.shell;
     if (shell) {
@@ -222,6 +245,9 @@
   }
   function findWorkspace(view) {
     const candidates = [
+      // Captured by the shim as the editor injected it; the reliable route, since
+      // MakeCode's Blockly is a bundled module with no global registry to query.
+      () => view.__arcadeWorkspace,
       () => view.Blockly?.getMainWorkspace?.(),
       () => view.Blockly?.common?.getMainWorkspace?.(),
       () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
@@ -254,7 +280,16 @@
     } catch {
       facts.push("canvas=unreadable");
     }
+    try {
+      const keys = Object.keys(view.Blockly ?? {});
+      facts.push(`blocklyKeys=${keys.length}:${keys.slice(0, 8).join(",") || "none"}`);
+      facts.push(`editorKeys=${Object.keys(view.pxt?.editor ?? {}).slice(0, 8).join(",") || "none"}`);
+    } catch {
+      facts.push("keys=unreadable");
+    }
     const routes = [
+      ["captured", () => view.__arcadeWorkspace],
+      ["Blockly.inject", () => view.Blockly?.inject],
       ["Blockly.getMainWorkspace", () => view.Blockly?.getMainWorkspace],
       ["Blockly.common", () => view.Blockly?.common?.getMainWorkspace],
       ["Workspace.getAll", () => view.Blockly?.Workspace?.getAll],
