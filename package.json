@@ -2,7 +2,7 @@
   "name": "blocks-editor-web",
   "displayName": "Blocks Editor (.blocks)",
   "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
-  "version": "0.1.26",
+  "version": "0.2.0",
   "publisher": "MaxeyTheCat",
   "license": "MIT",
   "engines": {
@@ -61,6 +61,10 @@
       }
     ],
     "commands": [
+      {
+        "command": "blocksEditor.restoreVersion",
+        "title": "Blocks: Restore an Earlier Version"
+      },
       {
         "command": "blocksEditor.openAsText",
         "title": "Blocks: Open Active File as XML Text"
@@ -128,6 +132,11 @@
           ],
           "default": "credentialless",
           "description": "Which element embeds the MakeCode editor. \"credentialless\" is the one that works under vscode.dev’s embedder policy."
+        },
+        "blocksEditor.highlightRemoteChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Briefly outline blocks when a collaborator changes them. Without it a remote change is silent — blocks rearrange themselves with nothing to say why."
         },
         "blocksEditor.autoSave": {
           "type": "boolean",

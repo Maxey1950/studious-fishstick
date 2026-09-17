@@ -69,7 +69,9 @@ function harness(xml) {
       blockToDom: (block) => block.element,
       domToBlock: (element) => {
         built.push(element);
-        workspace.blocks.push({ id: element.getAttribute('id') ?? 'new', element });
+        const block = { id: element.getAttribute('id') ?? 'new', element };
+        workspace.blocks.push(block);
+        return block;
       },
       domToVariables: () => {},
     },
@@ -254,4 +256,31 @@ test('an id-less base still recognizes its blocks by content', () => {
     undefined
   );
   assert.deepEqual(disposed, [], 'ours is new, theirs is unchanged, nothing is lost');
+});
+
+test('the merge reports which blocks it changed', () => {
+  // What the highlight needs: the blocks a collaborator's change actually
+  // altered, so they can be pointed out rather than appearing silently.
+  const before = XML(BLOCK('kept', 'kept-1'), BLOCK('edited', 'edited-1', 80));
+  const after = XML(
+    BLOCK('kept', 'kept-1'),
+    `<block type="edited" id="edited-1" x="0" y="240"/>`,
+    BLOCK('added', 'added-1', 320)
+  );
+
+  const { Blockly, workspace } = harness(before);
+  const touched = [];
+  assert.equal(
+    mergeIntoWorkspace(Blockly, workspace, parse(after), baseIndexOf(before), touched),
+    undefined
+  );
+  assert.deepEqual(touched.sort(), ['added-1', 'edited-1'], 'moved and added, not the untouched one');
+});
+
+test('nothing is reported when nothing changed', () => {
+  const xml = XML(BLOCK('a', 'a-1'));
+  const { Blockly, workspace } = harness(xml);
+  const touched = [];
+  mergeIntoWorkspace(Blockly, workspace, parse(xml), baseIndexOf(xml), touched);
+  assert.deepEqual(touched, []);
 });

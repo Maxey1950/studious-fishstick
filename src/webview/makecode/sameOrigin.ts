@@ -24,6 +24,8 @@ import { ARCADE_EDITOR_URL } from '../../shared/arcadeProtocol';
 export interface ApplyResult {
   mode: 'merge' | 'canvas' | 'import';
   detail: string;
+  /** The blocks the change actually altered, for showing where it landed. */
+  touched: string[];
 }
 
 /** What a same-origin probe found inside the editor. */
@@ -966,22 +968,27 @@ export function applyBlocksDirectly(
   const workspace = reach.workspace;
   const Blockly = blocklyOf(view, workspace);
   if (!workspace || !Blockly?.Xml) {
-    return { mode: 'import', detail: workspace ? 'no Blockly.Xml' : 'no workspace' };
+    return {
+      mode: 'import',
+      detail: workspace ? 'no Blockly.Xml' : 'no workspace',
+      touched: [],
+    };
   }
 
   let dom: Element;
   try {
     dom = Blockly.utils.xml.textToDom(xml);
   } catch (error) {
-    return { mode: 'import', detail: `unparseable XML: ${describe(error)}` };
+    return { mode: 'import', detail: `unparseable XML: ${describe(error)}`, touched: [] };
   }
 
   // Events stay off throughout: each disposal and rebuild would otherwise be
   // reported as the user's own edit and sent straight back out.
   Blockly.Events.disable();
   let merged: string | undefined;
+  const touched: string[] = [];
   try {
-    merged = mergeIntoWorkspace(Blockly, workspace, dom, base);
+    merged = mergeIntoWorkspace(Blockly, workspace, dom, base, touched);
   } catch (error) {
     merged = `merge threw: ${describe(error)}`;
   } finally {
@@ -989,7 +996,7 @@ export function applyBlocksDirectly(
   }
 
   if (merged === undefined) {
-    return { mode: 'merge', detail: 'changed blocks only' };
+    return { mode: 'merge', detail: `${touched.length} block(s) changed`, touched };
   }
 
   // The merge could not be trusted, but the workspace is still right here: a
@@ -1002,13 +1009,13 @@ export function applyBlocksDirectly(
   try {
     Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
   } catch (error) {
-    return { mode: 'import', detail: `reload threw: ${describe(error)}` };
+    return { mode: 'import', detail: `reload threw: ${describe(error)}`, touched: [] };
   } finally {
     Blockly.Events.enable();
   }
   workspace.setScale?.(scroll.scale);
   workspace.scroll?.(scroll.x, scroll.y);
-  return { mode: 'canvas', detail: merged };
+  return { mode: 'canvas', detail: merged, touched: [] };
 }
 
 function describe(error: unknown): string {
@@ -1039,7 +1046,8 @@ export function mergeIntoWorkspace(
   Blockly: any,
   workspace: any,
   dom: Element,
-  base?: BaseIndex
+  base?: BaseIndex,
+  touched?: string[]
 ): string | undefined {
   const incoming: Element[] = [];
   let variables: Element | undefined;
@@ -1136,7 +1144,12 @@ export function mergeIntoWorkspace(
   }
 
   for (const element of rebuild) {
-    Blockly.Xml.domToBlock(element, workspace);
+    const block = Blockly.Xml.domToBlock(element, workspace);
+    // Worth pointing out on screen: this is what somebody else just did, and
+    // otherwise it simply appears with nothing to say where it came from.
+    if (touched && block?.id) {
+      touched.push(block.id);
+    }
   }
 
   return undefined;
@@ -1249,4 +1262,68 @@ export function readBlocksDirectly(reach: EditorReach, view: any): string | unde
   } catch {
     return undefined;
   }
+}
+
+/** How long a block stays marked after somebody else changes it. */
+const HIGHLIGHT_MS = 1600;
+
+/**
+ * Outlines the blocks a collaborator just changed.
+ *
+ * Without this a remote change is completely silent — blocks rearrange
+ * themselves and nothing says why, which is unsettling in a way that reads as a
+ * bug even when everything is working. The outline fades on its own, so it says
+ * "this just happened" and then gets out of the way.
+ *
+ * Being same-origin is what allows it: the style goes into the editor's own
+ * document, and the blocks are real objects we can ask for by id.
+ */
+export function highlightBlocks(reach: EditorReach, view: any, ids: string[]): void {
+  if (!ids.length || !reach.workspace) {
+    return;
+  }
+  try {
+    installHighlightStyle(view);
+  } catch {
+    return;
+  }
+
+  for (const id of ids) {
+    try {
+      const root = reach.workspace.getBlockById?.(id)?.getSvgRoot?.();
+      if (!root) {
+        continue;
+      }
+      // Removed and re-added so a block changed twice in a row flashes twice,
+      // rather than the browser treating it as the same animation continuing.
+      root.classList.remove(HIGHLIGHT_CLASS);
+      void root.getBoundingClientRect();
+      root.classList.add(HIGHLIGHT_CLASS);
+      view.setTimeout(() => root.classList.remove(HIGHLIGHT_CLASS), HIGHLIGHT_MS);
+    } catch {
+      // A block that has gone again before we could mark it.
+    }
+  }
+}
+
+const HIGHLIGHT_CLASS = 'arcade-remote-change';
+
+/** Puts the highlight's stylesheet into the editor's document, once. */
+function installHighlightStyle(view: any): void {
+  const doc = view.document;
+  if (doc.getElementById('arcade-remote-change-style')) {
+    return;
+  }
+  const style = doc.createElement('style');
+  style.id = 'arcade-remote-change-style';
+  style.textContent = `
+    @keyframes ${HIGHLIGHT_CLASS} {
+      from { stroke: #ffc400; stroke-width: 5px; stroke-opacity: 1; }
+      to { stroke: #ffc400; stroke-width: 5px; stroke-opacity: 0; }
+    }
+    .${HIGHLIGHT_CLASS} > .blocklyPath {
+      animation: ${HIGHLIGHT_CLASS} ${HIGHLIGHT_MS}ms ease-out forwards;
+    }
+  `;
+  doc.head.appendChild(style);
 }

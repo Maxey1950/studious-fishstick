@@ -15,6 +15,8 @@ export type HostMessage =
       remoteApplyDelayMs: number;
       /** Which strategy is hosting the editor; `blob` means same-origin. */
       embedElement: string;
+      /** Whether to mark a collaborator's changes on the canvas as they land. */
+      highlightRemoteChanges: boolean;
       /**
        * True where the host page sets `Cross-Origin-Embedder-Policy:
        * require-corp` — vscode.dev does, desktop VS Code does not. It decides

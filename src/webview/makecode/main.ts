@@ -28,6 +28,7 @@ import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/
 import {
   applyBlocksDirectly,
   baseIndexOf,
+  highlightBlocks,
   reportEditorApi,
   createBlobEditorUrl,
   isWorkspaceBusy,
@@ -176,6 +177,8 @@ function startDirectPolling(): void {
 /** The project we hand the editor when it asks, kept current as edits land. */
 let project: ArcadeProject = createProject('blocks', '');
 let syncOptions: SyncOptions = DEFAULT_SYNC_OPTIONS;
+/** Whether a collaborator's changes are marked on the canvas as they land. */
+let highlightRemote = true;
 let sync = new SyncState(syncOptions);
 let booted = false;
 let timer: number | undefined;
@@ -343,7 +346,7 @@ function applyRemote(blocks: string): void {
   // only route in, and it rebuilds all of them.
   const applied = reach?.sameOrigin
     ? applyBlocksDirectly(reach, frame.contentWindow as unknown, blocks, baseIndexOf(agreedBlocks))
-    : ({ mode: 'import', detail: 'cross-origin' } as const);
+    : ({ mode: 'import', detail: 'cross-origin', touched: [] } as const);
 
   // Say which route the change took. A reload is the thing we are trying to
   // avoid, so when one happens it should be possible to read why rather than
@@ -371,6 +374,9 @@ function applyRemote(blocks: string): void {
     // know its code changed and the simulator is still running the old program.
     // Ask it to start again, once the changes stop arriving.
     scheduleSimulatorRestart();
+    if (highlightRemote) {
+      highlightBlocks(reach!, frame.contentWindow as unknown, applied.touched);
+    }
   }
 
   showStatus(undefined);
@@ -456,6 +462,7 @@ function handleHostMessage(message: HostMessage): void {
         sendDebounceMs: message.debounceMs,
         applyAfterIdleMs: message.remoteApplyDelayMs,
       };
+      highlightRemote = message.highlightRemoteChanges;
       documentBlocks = message.xml;
       agreedBlocks = message.xml;
       hostFiles = { ...message.files };

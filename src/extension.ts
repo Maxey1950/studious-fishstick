@@ -2,7 +2,19 @@ import * as vscode from 'vscode';
 import { BlocksEditorProvider } from './blocksEditorProvider';
 
 export function activate(context: vscode.ExtensionContext): void {
-  context.subscriptions.push(BlocksEditorProvider.register(context));
+  const provider = new BlocksEditorProvider(context);
+  context.subscriptions.push(BlocksEditorProvider.register(context, provider));
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('blocksEditor.restoreVersion', async () => {
+      const uri = activeBlocksUri();
+      if (!uri) {
+        void vscode.window.showInformationMessage('No .blocks file is active.');
+        return;
+      }
+      await provider.restoreVersion(uri);
+    })
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('blocksEditor.openAsText', async () => {

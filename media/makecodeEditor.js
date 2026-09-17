@@ -897,43 +897,48 @@ ${lines.join("\n")}`);
     const workspace = reach2.workspace;
     const Blockly = blocklyOf(view, workspace);
     if (!workspace || !Blockly?.Xml) {
-      return { mode: "import", detail: workspace ? "no Blockly.Xml" : "no workspace" };
+      return {
+        mode: "import",
+        detail: workspace ? "no Blockly.Xml" : "no workspace",
+        touched: []
+      };
     }
     let dom;
     try {
       dom = Blockly.utils.xml.textToDom(xml);
     } catch (error) {
-      return { mode: "import", detail: `unparseable XML: ${describe(error)}` };
+      return { mode: "import", detail: `unparseable XML: ${describe(error)}`, touched: [] };
     }
     Blockly.Events.disable();
     let merged;
+    const touched = [];
     try {
-      merged = mergeIntoWorkspace(Blockly, workspace, dom, base);
+      merged = mergeIntoWorkspace(Blockly, workspace, dom, base, touched);
     } catch (error) {
       merged = `merge threw: ${describe(error)}`;
     } finally {
       Blockly.Events.enable();
     }
     if (merged === void 0) {
-      return { mode: "merge", detail: "changed blocks only" };
+      return { mode: "merge", detail: `${touched.length} block(s) changed`, touched };
     }
     const scroll = { x: workspace.scrollX, y: workspace.scrollY, scale: workspace.scale };
     Blockly.Events.disable();
     try {
       Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
     } catch (error) {
-      return { mode: "import", detail: `reload threw: ${describe(error)}` };
+      return { mode: "import", detail: `reload threw: ${describe(error)}`, touched: [] };
     } finally {
       Blockly.Events.enable();
     }
     workspace.setScale?.(scroll.scale);
     workspace.scroll?.(scroll.x, scroll.y);
-    return { mode: "canvas", detail: merged };
+    return { mode: "canvas", detail: merged, touched: [] };
   }
   function describe(error) {
     return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   }
-  function mergeIntoWorkspace(Blockly, workspace, dom, base) {
+  function mergeIntoWorkspace(Blockly, workspace, dom, base, touched) {
     const incoming = [];
     let variables;
     for (const child of Array.from(dom.children)) {
@@ -998,7 +1003,10 @@ ${lines.join("\n")}`);
       block.dispose(false);
     }
     for (const element of rebuild) {
-      Blockly.Xml.domToBlock(element, workspace);
+      const block = Blockly.Xml.domToBlock(element, workspace);
+      if (touched && block?.id) {
+        touched.push(block.id);
+      }
     }
     return void 0;
   }
@@ -1065,6 +1073,49 @@ ${lines.join("\n")}`);
     } catch {
       return void 0;
     }
+  }
+  var HIGHLIGHT_MS = 1600;
+  function highlightBlocks(reach2, view, ids) {
+    if (!ids.length || !reach2.workspace) {
+      return;
+    }
+    try {
+      installHighlightStyle(view);
+    } catch {
+      return;
+    }
+    for (const id of ids) {
+      try {
+        const root = reach2.workspace.getBlockById?.(id)?.getSvgRoot?.();
+        if (!root) {
+          continue;
+        }
+        root.classList.remove(HIGHLIGHT_CLASS);
+        void root.getBoundingClientRect();
+        root.classList.add(HIGHLIGHT_CLASS);
+        view.setTimeout(() => root.classList.remove(HIGHLIGHT_CLASS), HIGHLIGHT_MS);
+      } catch {
+      }
+    }
+  }
+  var HIGHLIGHT_CLASS = "arcade-remote-change";
+  function installHighlightStyle(view) {
+    const doc = view.document;
+    if (doc.getElementById("arcade-remote-change-style")) {
+      return;
+    }
+    const style = doc.createElement("style");
+    style.id = "arcade-remote-change-style";
+    style.textContent = `
+    @keyframes ${HIGHLIGHT_CLASS} {
+      from { stroke: #ffc400; stroke-width: 5px; stroke-opacity: 1; }
+      to { stroke: #ffc400; stroke-width: 5px; stroke-opacity: 0; }
+    }
+    .${HIGHLIGHT_CLASS} > .blocklyPath {
+      animation: ${HIGHLIGHT_CLASS} ${HIGHLIGHT_MS}ms ease-out forwards;
+    }
+  `;
+    doc.head.appendChild(style);
   }
 
   // src/webview/makecode/main.ts
@@ -1149,6 +1200,7 @@ ${lines.join("\n")}`);
   }
   var project = createProject("blocks", "");
   var syncOptions = DEFAULT_SYNC_OPTIONS;
+  var highlightRemote = true;
   var sync = new SyncState(syncOptions);
   var booted = false;
   var timer;
@@ -1236,7 +1288,7 @@ ${lines.join("\n")}`);
     }
     project = withBlocks(project, blocks);
     probeOnce();
-    const applied = reach?.sameOrigin ? applyBlocksDirectly(reach, frame.contentWindow, blocks, baseIndexOf(agreedBlocks)) : { mode: "import", detail: "cross-origin" };
+    const applied = reach?.sameOrigin ? applyBlocksDirectly(reach, frame.contentWindow, blocks, baseIndexOf(agreedBlocks)) : { mode: "import", detail: "cross-origin", touched: [] };
     console.log(`[blocks] applied via ${applied.mode}: ${applied.detail}`);
     if (applied.mode === "import") {
       frame.contentWindow?.postMessage(importProjectMessage(project), "*");
@@ -1247,6 +1299,9 @@ ${lines.join("\n")}`);
       lastPolled = readBlocksDirectly(reach, frame.contentWindow) ?? blocks;
       agreedBlocks = blocks;
       scheduleSimulatorRestart();
+      if (highlightRemote) {
+        highlightBlocks(reach, frame.contentWindow, applied.touched);
+      }
     }
     showStatus(void 0);
   }
@@ -1302,6 +1357,7 @@ ${lines.join("\n")}`);
           sendDebounceMs: message.debounceMs,
           applyAfterIdleMs: message.remoteApplyDelayMs
         };
+        highlightRemote = message.highlightRemoteChanges;
         documentBlocks = message.xml;
         agreedBlocks = message.xml;
         hostFiles = { ...message.files };

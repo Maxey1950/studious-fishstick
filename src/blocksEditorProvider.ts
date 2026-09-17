@@ -7,6 +7,7 @@ import {
   withDeclaredFiles,
   type ProjectText,
 } from './shared/projectFiles';
+import { recordVersion, describeVersion, type Version } from './shared/history';
 import { minimalReplacement } from './textDiff';
 
 /**
@@ -34,12 +35,29 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
   /** Pending auto-saves, one per document, so a burst of edits is one write. */
   private readonly saveTimers = new Map<string, number>();
 
+  /**
+   * Recent states of each open document, newest first.
+   *
+   * Kept for as long as the editor is open, which is the window in which
+   * something can go wrong and be noticed.
+   */
+  private readonly history = new Map<string, Version[]>();
+
   constructor(private readonly context: vscode.ExtensionContext) {}
 
-  public static register(context: vscode.ExtensionContext): vscode.Disposable {
+  /**
+   * Registers the editor, optionally with a provider the caller already holds.
+   *
+   * The restore command needs to reach the same instance the editors run on,
+   * since the history lives there.
+   */
+  public static register(
+    context: vscode.ExtensionContext,
+    provider = new BlocksEditorProvider(context)
+  ): vscode.Disposable {
     return vscode.window.registerCustomEditorProvider(
       BlocksEditorProvider.viewType,
-      new BlocksEditorProvider(context),
+      provider,
       {
         // Keep the Blockly workspace alive when the tab is backgrounded, so
         // scroll position and selection survive tab switches.
@@ -67,6 +85,8 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     // ever reaches it, the editor never loads the document, and nothing it does
     // can be saved.
     await this.loadProjectFiles(document);
+    // The state it opened in is a version worth being able to get back to.
+    this.remember(document, document.getText());
 
     const engine = this.engineFor(document);
     webview.html =
@@ -114,6 +134,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
           return;
         }
         const text = event.document.getText();
+        this.remember(document, text);
         if (recentFromWebview.includes(text)) {
           return;
         }
@@ -146,6 +167,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
             return;
           case 'edit':
             rememberFromWebview(message.xml);
+            this.remember(document, message.xml);
             await this.writeBack(document, message.xml);
             this.scheduleSave(document);
             return;
@@ -202,6 +224,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
       debounceMs: config.get<number>('writeDebounceMs', 100),
       remoteApplyDelayMs: config.get<number>('remoteApplyDelayMs', 150),
       embedElement: this.embedElementFor(document),
+      highlightRemoteChanges: config.get<boolean>('highlightRemoteChanges', true),
       // vscode.dev serves its pages with an embedder policy that desktop VS
       // Code does not set, and the difference decides how the editor's frames
       // have to be loaded.
@@ -268,6 +291,54 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
         void this.save(document);
       }, config.get<number>('autoSaveDelayMs', 800)) as unknown as number
     );
+  }
+
+  /** Adds a state to this document's history. */
+  private remember(document: vscode.TextDocument, xml: string): void {
+    const key = document.uri.toString();
+    this.history.set(key, recordVersion(this.history.get(key) ?? [], xml, Date.now()));
+  }
+
+  /**
+   * Offers the recent states of a document and restores the chosen one.
+   *
+   * Restoring is an ordinary edit, so it reaches collaborators the way every
+   * other change does — which is the point. Someone whose blocks vanished can
+   * put them back for everybody, not just for themselves.
+   */
+  public async restoreVersion(uri: vscode.Uri): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const versions = this.history.get(uri.toString()) ?? [];
+    const current = document.getText();
+    const choices = versions.filter((version) => version.xml !== current);
+
+    if (!choices.length) {
+      void vscode.window.showInformationMessage(
+        versions.length
+          ? 'Blocks Editor: this file has not changed since it was opened.'
+          : 'Blocks Editor: no earlier versions have been recorded for this file yet.'
+      );
+      return;
+    }
+
+    const now = Date.now();
+    const picked = await vscode.window.showQuickPick(
+      choices.map((version, index) => ({
+        label: describeVersion(version, now),
+        description: index === 0 ? 'the state just before the latest change' : undefined,
+        version,
+      })),
+      {
+        title: 'Restore blocks from an earlier version',
+        placeHolder: 'Everyone working on this file will see the restored blocks',
+      }
+    );
+    if (!picked) {
+      return;
+    }
+
+    await this.writeBack(document, picked.version.xml);
+    await this.save(document);
   }
 
   /** Where a project file lives: beside the `.blocks` file. */
