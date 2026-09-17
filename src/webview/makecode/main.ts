@@ -102,6 +102,13 @@ function probeOnce(): void {
   const previous = reach?.detail;
   reach = probeEditor(frame);
 
+  if (reach.detail !== previous) {
+    // To the console as well as the status bar. The status bar is one line in a
+    // narrow panel and this is a long report; the console is where it can
+    // actually be read, and copied.
+    console.log(`[blocks] reach — ${reach.detail}`);
+  }
+
   if (reach.sameOrigin && reach.workspace) {
     showStatus(undefined);
     startDirectPolling();

@@ -506,39 +506,42 @@
       sameOrigin: true,
       globals,
       workspace,
-      detail: workspace ? `same-origin, workspace reachable (globals: ${globals.join(", ") || "none"})` : `same-origin, no workspace \u2014 ${describeEditorState(view)}`
+      detail: workspace ? `same-origin, workspace reachable via ${workspaceRoute} (globals: ${globals.join(", ") || "none"})` : `same-origin, no workspace \u2014 ${describeEditorState(view)}`
     };
   }
   function findWorkspace(view) {
     const candidates = [
       // Captured by the shim as the editor injected it; the reliable route, since
       // MakeCode's Blockly is a bundled module with no global registry to query.
-      () => view.__arcadeWorkspace,
+      ["captured", () => view.__arcadeWorkspace],
       // Through the ProjectView the editor handed to its own extension hook.
-      () => view.__arcadeOpts?.projectView?.blocksEditor?.editor,
-      () => view.__arcadeOpts?.projectView?.editor?.editor,
-      () => view.__arcadeOpts?.projectView?.blocksEditor?.workspace,
+      ["opts.blocksEditor", () => view.__arcadeOpts?.projectView?.blocksEditor?.editor],
+      ["opts.editor", () => view.__arcadeOpts?.projectView?.editor?.editor],
+      ["opts.workspace", () => view.__arcadeOpts?.projectView?.blocksEditor?.workspace],
       // Through React, which owns the canvas whether or not any pxt hook fired.
-      () => findWorkspaceViaReact(view),
-      () => view.Blockly?.getMainWorkspace?.(),
-      () => view.Blockly?.common?.getMainWorkspace?.(),
-      () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
-      () => view.Blockly?.Workspace?.getAll?.()?.[0],
-      () => view.pxt?.blocks?.getMainWorkspace?.(),
-      () => view.pxtblockly?.getMainWorkspace?.(),
-      () => view.pxt?.editor?.mainWorkspace
+      ["react", () => findWorkspaceViaReact(view)],
+      ["Blockly.getMainWorkspace", () => view.Blockly?.getMainWorkspace?.()],
+      ["Blockly.common", () => view.Blockly?.common?.getMainWorkspace?.()],
+      ["Blockly.common.all", () => view.Blockly?.common?.getAllWorkspaces?.()?.[0]],
+      ["Workspace.getAll", () => view.Blockly?.Workspace?.getAll?.()?.[0]],
+      ["pxt.blocks", () => view.pxt?.blocks?.getMainWorkspace?.()],
+      ["pxtblockly", () => view.pxtblockly?.getMainWorkspace?.()],
+      ["pxt.editor", () => view.pxt?.editor?.mainWorkspace]
     ];
-    for (const candidate of candidates) {
+    for (const [name, candidate] of candidates) {
       try {
         const workspace = candidate();
         if (isWorkspace(workspace)) {
+          workspaceRoute = name;
           return workspace;
         }
       } catch {
       }
     }
+    workspaceRoute = "scan";
     return scanForWorkspace(view);
   }
+  var workspaceRoute = "none";
   function isWorkspace(value) {
     try {
       return Boolean(
@@ -945,6 +948,9 @@
     }
     const previous = reach?.detail;
     reach = probeEditor(frame);
+    if (reach.detail !== previous) {
+      console.log(`[blocks] reach \u2014 ${reach.detail}`);
+    }
     if (reach.sameOrigin && reach.workspace) {
       showStatus(void 0);
       startDirectPolling();

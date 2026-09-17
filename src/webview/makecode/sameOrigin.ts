@@ -392,7 +392,8 @@ export function probeEditor(frame: HTMLIFrameElement): EditorReach {
     globals,
     workspace,
     detail: workspace
-      ? `same-origin, workspace reachable (globals: ${globals.join(', ') || 'none'})`
+      ? `same-origin, workspace reachable via ${workspaceRoute} ` +
+        `(globals: ${globals.join(', ') || 'none'})`
       : `same-origin, no workspace — ${describeEditorState(view)}`,
   };
 }
@@ -405,29 +406,30 @@ export function probeEditor(frame: HTMLIFrameElement): EditorReach {
  * are tried rather than assuming which one holds it.
  */
 function findWorkspace(view: any): any {
-  const candidates: Array<() => any> = [
+  const candidates: Array<[string, () => any]> = [
     // Captured by the shim as the editor injected it; the reliable route, since
     // MakeCode's Blockly is a bundled module with no global registry to query.
-    () => view.__arcadeWorkspace,
+    ['captured', () => view.__arcadeWorkspace],
     // Through the ProjectView the editor handed to its own extension hook.
-    () => view.__arcadeOpts?.projectView?.blocksEditor?.editor,
-    () => view.__arcadeOpts?.projectView?.editor?.editor,
-    () => view.__arcadeOpts?.projectView?.blocksEditor?.workspace,
+    ['opts.blocksEditor', () => view.__arcadeOpts?.projectView?.blocksEditor?.editor],
+    ['opts.editor', () => view.__arcadeOpts?.projectView?.editor?.editor],
+    ['opts.workspace', () => view.__arcadeOpts?.projectView?.blocksEditor?.workspace],
     // Through React, which owns the canvas whether or not any pxt hook fired.
-    () => findWorkspaceViaReact(view),
-    () => view.Blockly?.getMainWorkspace?.(),
-    () => view.Blockly?.common?.getMainWorkspace?.(),
-    () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
-    () => view.Blockly?.Workspace?.getAll?.()?.[0],
-    () => view.pxt?.blocks?.getMainWorkspace?.(),
-    () => view.pxtblockly?.getMainWorkspace?.(),
-    () => view.pxt?.editor?.mainWorkspace,
+    ['react', () => findWorkspaceViaReact(view)],
+    ['Blockly.getMainWorkspace', () => view.Blockly?.getMainWorkspace?.()],
+    ['Blockly.common', () => view.Blockly?.common?.getMainWorkspace?.()],
+    ['Blockly.common.all', () => view.Blockly?.common?.getAllWorkspaces?.()?.[0]],
+    ['Workspace.getAll', () => view.Blockly?.Workspace?.getAll?.()?.[0]],
+    ['pxt.blocks', () => view.pxt?.blocks?.getMainWorkspace?.()],
+    ['pxtblockly', () => view.pxtblockly?.getMainWorkspace?.()],
+    ['pxt.editor', () => view.pxt?.editor?.mainWorkspace],
   ];
 
-  for (const candidate of candidates) {
+  for (const [name, candidate] of candidates) {
     try {
       const workspace = candidate();
       if (isWorkspace(workspace)) {
+        workspaceRoute = name;
         return workspace;
       }
     } catch {
@@ -435,12 +437,19 @@ function findWorkspace(view: any): any {
     }
   }
 
+  workspaceRoute = 'scan';
   // None of the known names held it. MakeCode's build need not put Blockly on
   // the window at all — in the build this runs against it does not — so rather
   // than guessing at another name, look for an object that behaves like a
   // workspace.
   return scanForWorkspace(view);
 }
+
+/**
+ * Which route reached the workspace, so a success says how rather than just
+ * that it happened — the routes fail for different reasons on different builds.
+ */
+let workspaceRoute = 'none';
 
 /**
  * A workspace is whatever can list its blocks and be driven.
