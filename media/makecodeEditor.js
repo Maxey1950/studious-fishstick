@@ -206,22 +206,58 @@
       sameOrigin: true,
       globals,
       workspace,
-      detail: workspace ? `same-origin, workspace reachable (globals: ${globals.join(", ") || "none"})` : `same-origin but no workspace found (globals: ${globals.join(", ") || "none"})`
+      detail: workspace ? `same-origin, workspace reachable (globals: ${globals.join(", ") || "none"})` : `same-origin, no workspace \u2014 ${describeEditorState(view)}`
     };
   }
   function findWorkspace(view) {
-    try {
-      if (view.Blockly?.getMainWorkspace) {
-        return view.Blockly.getMainWorkspace();
+    const candidates = [
+      () => view.Blockly?.getMainWorkspace?.(),
+      () => view.Blockly?.common?.getMainWorkspace?.(),
+      () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
+      () => view.Blockly?.Workspace?.getAll?.()?.[0],
+      () => view.pxt?.blocks?.getMainWorkspace?.(),
+      () => view.pxtblockly?.getMainWorkspace?.(),
+      () => view.pxt?.editor?.mainWorkspace
+    ];
+    for (const candidate of candidates) {
+      try {
+        const workspace = candidate();
+        if (workspace?.getAllBlocks) {
+          return workspace;
+        }
+      } catch {
       }
-      if (view.pxtblockly?.getMainWorkspace) {
-        return view.pxtblockly.getMainWorkspace();
-      }
-      const main = view.pxt?.editor?.mainWorkspace ?? view.pxt?.blocks?.getMainWorkspace?.();
-      return main ?? void 0;
-    } catch {
-      return void 0;
     }
+    return void 0;
+  }
+  function describeEditorState(view) {
+    const facts = [];
+    try {
+      facts.push(`search=${view.location?.search || "(none)"}`);
+    } catch {
+      facts.push("search=unreadable");
+    }
+    try {
+      facts.push(`canvas=${view.document.querySelectorAll(".injectionDiv").length}`);
+      facts.push(`blocks=${view.document.querySelectorAll(".blocklyDraggable").length}`);
+    } catch {
+      facts.push("canvas=unreadable");
+    }
+    const routes = [
+      ["Blockly.getMainWorkspace", () => view.Blockly?.getMainWorkspace],
+      ["Blockly.common", () => view.Blockly?.common?.getMainWorkspace],
+      ["Workspace.getAll", () => view.Blockly?.Workspace?.getAll],
+      ["pxt.blocks", () => view.pxt?.blocks?.getMainWorkspace],
+      ["pxt.editor", () => view.pxt?.editor]
+    ].filter(([, get]) => {
+      try {
+        return Boolean(get());
+      } catch {
+        return false;
+      }
+    }).map(([name]) => name);
+    facts.push(`routes=${routes.join("/") || "none"}`);
+    return facts.join(" ");
   }
   function applyBlocksDirectly(reach2, view, xml) {
     const workspace = reach2.workspace;

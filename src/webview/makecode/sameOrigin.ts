@@ -137,25 +137,84 @@ export function probeEditor(frame: HTMLIFrameElement): EditorReach {
     workspace,
     detail: workspace
       ? `same-origin, workspace reachable (globals: ${globals.join(', ') || 'none'})`
-      : `same-origin but no workspace found (globals: ${globals.join(', ') || 'none'})`,
+      : `same-origin, no workspace — ${describeEditorState(view)}`,
   };
 }
 
-/** Finds the editor's main Blockly workspace, however it is exposed. */
+/**
+ * Finds the editor's main Blockly workspace, however it is exposed.
+ *
+ * MakeCode bundles Blockly as a webpack module, so the global `Blockly` is not
+ * necessarily the instance that created the editor's workspace. Several routes
+ * are tried rather than assuming which one holds it.
+ */
 function findWorkspace(view: any): any {
-  try {
-    if (view.Blockly?.getMainWorkspace) {
-      return view.Blockly.getMainWorkspace();
+  const candidates: Array<() => any> = [
+    () => view.Blockly?.getMainWorkspace?.(),
+    () => view.Blockly?.common?.getMainWorkspace?.(),
+    () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
+    () => view.Blockly?.Workspace?.getAll?.()?.[0],
+    () => view.pxt?.blocks?.getMainWorkspace?.(),
+    () => view.pxtblockly?.getMainWorkspace?.(),
+    () => view.pxt?.editor?.mainWorkspace,
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const workspace = candidate();
+      // A workspace that can be serialized is one we can actually drive.
+      if (workspace?.getAllBlocks) {
+        return workspace;
+      }
+    } catch {
+      // Try the next route.
     }
-    // pxt keeps its Blockly under its own namespace in some builds.
-    if (view.pxtblockly?.getMainWorkspace) {
-      return view.pxtblockly.getMainWorkspace();
-    }
-    const main = view.pxt?.editor?.mainWorkspace ?? view.pxt?.blocks?.getMainWorkspace?.();
-    return main ?? undefined;
-  } catch {
-    return undefined;
   }
+  return undefined;
+}
+
+/**
+ * Describes what the editor's document looks like from here.
+ *
+ * Reported on screen when no workspace is found, because the useful facts are
+ * ones only a real editor can reveal: whether the query string survived being
+ * re-hosted, whether the editor actually built a Blockly canvas, and which
+ * access routes exist.
+ */
+function describeEditorState(view: any): string {
+  const facts: string[] = [];
+
+  try {
+    facts.push(`search=${view.location?.search || '(none)'}`);
+  } catch {
+    facts.push('search=unreadable');
+  }
+
+  try {
+    facts.push(`canvas=${view.document.querySelectorAll('.injectionDiv').length}`);
+    facts.push(`blocks=${view.document.querySelectorAll('.blocklyDraggable').length}`);
+  } catch {
+    facts.push('canvas=unreadable');
+  }
+
+  const routes = [
+    ['Blockly.getMainWorkspace', () => view.Blockly?.getMainWorkspace],
+    ['Blockly.common', () => view.Blockly?.common?.getMainWorkspace],
+    ['Workspace.getAll', () => view.Blockly?.Workspace?.getAll],
+    ['pxt.blocks', () => view.pxt?.blocks?.getMainWorkspace],
+    ['pxt.editor', () => view.pxt?.editor],
+  ]
+    .filter(([, get]) => {
+      try {
+        return Boolean((get as () => unknown)());
+      } catch {
+        return false;
+      }
+    })
+    .map(([name]) => name as string);
+  facts.push(`routes=${routes.join('/') || 'none'}`);
+
+  return facts.join(' ');
 }
 
 /**
