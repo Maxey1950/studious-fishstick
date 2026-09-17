@@ -157,21 +157,32 @@
     const html = await response.text();
     const origin = new URL(ARCADE_EDITOR_URL).origin;
     const absolute = html.replace(/"\/---/g, `"${origin}/---`);
-    const query = new URL(ARCADE_EDITOR_URL).search;
     const patched = absolute.replace(
       /<head([^>]*)>/i,
-      `<head$1><base href="${origin}/">${queryShim(query)}${WORKER_SHIM}`
+      `<head$1><base href="${origin}/">${controllerShim()}${WORKER_SHIM}`
     );
     if (!patched.includes("<base")) {
       throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");
     }
     return URL.createObjectURL(new Blob([patched], { type: "text/html" }));
   }
-  function queryShim(search) {
-    if (!search) {
-      return "";
+  function controllerShim() {
+    return `<script>(function () {
+  var started = Date.now();
+  var timer = setInterval(function () {
+    var shell = window.pxt && window.pxt.shell;
+    if (shell) {
+      try {
+        shell.isControllerMode = function () { return true; };
+        shell.isSandboxMode = function () { return false; };
+        shell.isReadOnly = function () { return false; };
+      } catch (e) {}
+      clearInterval(timer);
+    } else if (Date.now() - started > 15000) {
+      clearInterval(timer);
     }
-    return `<script>try{history.replaceState(null,'',${JSON.stringify(search)});}catch(e){}<\/script>`;
+  }, 2);
+}());<\/script>`;
   }
   var WORKER_SHIM = `<script>(function () {
   var Native = window.Worker;
