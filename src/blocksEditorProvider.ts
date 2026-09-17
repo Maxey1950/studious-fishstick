@@ -246,23 +246,36 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     // editor. Choosing `blob` is opting into running MakeCode's code beside our
     // own rather than walled off from it.
     const makecode =
-      'https://arcade.makecode.com https://*.makecode.com https://cdn.makecode.com';
+      'https://arcade.makecode.com https://*.makecode.com https://cdn.makecode.com ' +
+      'https://trg-arcade.userpxt.io';
     const sameOrigin = embedElement === 'blob';
+
+    // A nonce and 'unsafe-inline' cannot coexist: per the CSP spec a nonce in
+    // the source list makes 'unsafe-inline' ignored entirely. In same-origin
+    // mode MakeCode's own inline scripts have to run — one of them carries its
+    // configuration, and without it the editor cannot work out any of its URLs
+    // — so that mode drops the nonce and allows our script by its source
+    // instead.
+    const scriptSrc = sameOrigin
+      ? `script-src ${webview.cspSource} 'unsafe-inline' 'unsafe-eval' blob: ${makecode}`
+      : `script-src 'nonce-${nonce}'`;
 
     const csp = [
       `default-src 'none'`,
       `frame-src ${makecode}${sameOrigin ? ' blob:' : ''}`,
       `object-src ${makecode}`,
+      `child-src ${sameOrigin ? `blob: ${makecode}` : "'none'"}`,
       `img-src ${webview.cspSource} data: blob:${sameOrigin ? ` ${makecode}` : ''}`,
       `style-src ${webview.cspSource} 'unsafe-inline'${sameOrigin ? ` ${makecode}` : ''}`,
       `font-src ${webview.cspSource}${sameOrigin ? ` ${makecode} data:` : ''}`,
-      `media-src ${webview.cspSource}${sameOrigin ? ` ${makecode}` : ''}`,
-      // Fetching the editor's own markup, which `blob` mode reads and re-hosts.
-      `connect-src ${makecode}`,
+      `media-src ${webview.cspSource}${sameOrigin ? ` ${makecode} blob:` : ''}`,
+      // The editor asks for its simulator's web manifest, which falls back to
+      // default-src unless named.
+      `manifest-src ${sameOrigin ? makecode : "'none'"}`,
+      // webview.cspSource covers our own script's source map.
+      `connect-src ${makecode} ${webview.cspSource}${sameOrigin ? ' blob: data:' : ''}`,
       sameOrigin ? `worker-src blob: ${makecode}` : `worker-src 'none'`,
-      sameOrigin
-        ? `script-src 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval' blob: ${makecode}`
-        : `script-src 'nonce-${nonce}'`,
+      scriptSrc,
     ].join('; ');
 
     return `<!DOCTYPE html>
@@ -277,7 +290,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
 <body class="makecode-engine">
 <div id="status" class="status" role="status" hidden></div>
 ${embedTag(embedElement)}
-<script nonce="${nonce}" src="${scriptUri}"></script>
+<script${sameOrigin ? '' : ` nonce="${nonce}"`} src="${scriptUri}"></script>
 </body>
 </html>`;
   }
