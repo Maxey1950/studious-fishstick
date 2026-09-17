@@ -80,9 +80,19 @@ export async function createBlobEditorUrl(requireCorp: boolean): Promise<string>
     ? absolute.replace(/<iframe(\s)/gi, '<iframe credentialless$1')
     : absolute;
 
-  const patched = framed.replace(
+  // Under the same policy, every cross-origin subresource must say it may be
+  // embedded. MakeCode's CDN does not, so on vscode.dev its scripts and
+  // stylesheets are refused outright — including the bundle that defines `pxt`,
+  // which is why the editor came up as a blank frame and a ReferenceError.
+  //
+  // A resource may also pass by being fetched as CORS, and the CDN allows that
+  // from anywhere. Asking for these as CORS satisfies the policy without
+  // needing MakeCode to change a header.
+  const corsed = requireCorp ? requestAsCors(framed) : framed;
+
+  const patched = corsed.replace(
     /<head([^>]*)>/i,
-    `<head$1><base href="${origin}/">${controllerShim()}${SAVE_SHIM}${requireCorp ? FRAME_SHIM : ''}${WORKER_SHIM}`
+    `<head$1><base href="${origin}/">${controllerShim()}${SAVE_SHIM}${requireCorp ? ELEMENT_SHIM : ''}${WORKER_SHIM}`
   );
   if (!patched.includes('<base')) {
     throw new Error('could not find a <head> to anchor the editor’s asset paths');
@@ -230,20 +240,47 @@ const SAVE_SHIM = `<script>(function () {
 }());</script>`;
 
 /**
- * Makes the frames the editor creates embeddable under a require-corp document.
+ * Marks the page's cross-origin scripts and stylesheets as CORS requests.
  *
- * The simulator's frame is built at runtime rather than served in the page, so
- * rewriting the fetched HTML does not reach it. `credentialless` has to be set
- * before the frame enters the document — afterwards its load has already begun
- * — so this marks them as they are created.
+ * Only those that name an absolute URL: an inline script has nothing to fetch,
+ * and a tag that already says how it wants to be fetched is left as it is.
+ *
+ * Exported for testing. Getting this wrong takes the whole editor down on
+ * vscode.dev — a script that is not marked is refused, and one that is mangled
+ * never loads at all.
  */
-const FRAME_SHIM = `<script>(function () {
+export function requestAsCors(html: string): string {
+  return html.replace(
+    /<(script|link)\s([^>]*(?:src|href)="https:\/\/[^"]*"[^>]*)>/gi,
+    (tag, name, attributes) =>
+      /crossorigin/i.test(attributes) ? tag : `<${name} crossorigin="anonymous" ${attributes}>`
+  );
+}
+
+/**
+ * Applies both rules to the elements the editor creates as it runs.
+ *
+ * Rewriting the fetched HTML cannot reach these, and MakeCode builds a good
+ * deal of itself this way — the simulator's frame among them. Both attributes
+ * have to be set before the element enters the document, because by then its
+ * load has already begun, which is why they are set as it is created.
+ *
+ * One patch of `createElement` rather than two: wrapping a wrapper works, but
+ * it leaves two places to look when the editor stops building something.
+ */
+const ELEMENT_SHIM = `<script>(function () {
   var create = document.createElement.bind(document);
   document.createElement = function (tag) {
     var element = create.apply(null, arguments);
     try {
-      if (String(tag).toLowerCase() === 'iframe') {
+      var name = String(tag).toLowerCase();
+      if (name === 'iframe') {
+        // Embeddable under a require-corp document, which the simulator's own
+        // origin does not claim to be.
         element.credentialless = true;
+      } else if (name === 'script' || name === 'link') {
+        // Fetched as CORS, which is the other way to satisfy that policy.
+        element.crossOrigin = 'anonymous';
       }
     } catch (e) {}
     return element;

@@ -302,9 +302,10 @@
     const origin = new URL(ARCADE_EDITOR_URL).origin;
     const absolute = html.replace(/"\/---/g, `"${origin}/---`);
     const framed = requireCorp ? absolute.replace(/<iframe(\s)/gi, "<iframe credentialless$1") : absolute;
-    const patched = framed.replace(
+    const corsed = requireCorp ? requestAsCors(framed) : framed;
+    const patched = corsed.replace(
       /<head([^>]*)>/i,
-      `<head$1><base href="${origin}/">${controllerShim()}${SAVE_SHIM}${requireCorp ? FRAME_SHIM : ""}${WORKER_SHIM}`
+      `<head$1><base href="${origin}/">${controllerShim()}${SAVE_SHIM}${requireCorp ? ELEMENT_SHIM : ""}${WORKER_SHIM}`
     );
     if (!patched.includes("<base")) {
       throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");
@@ -416,13 +417,25 @@
     try { parent.postMessage({ type: 'blocksEditorSave' }, '*'); } catch (e) {}
   }, true);
 }());<\/script>`;
-  var FRAME_SHIM = `<script>(function () {
+  function requestAsCors(html) {
+    return html.replace(
+      /<(script|link)\s([^>]*(?:src|href)="https:\/\/[^"]*"[^>]*)>/gi,
+      (tag, name, attributes) => /crossorigin/i.test(attributes) ? tag : `<${name} crossorigin="anonymous" ${attributes}>`
+    );
+  }
+  var ELEMENT_SHIM = `<script>(function () {
   var create = document.createElement.bind(document);
   document.createElement = function (tag) {
     var element = create.apply(null, arguments);
     try {
-      if (String(tag).toLowerCase() === 'iframe') {
+      var name = String(tag).toLowerCase();
+      if (name === 'iframe') {
+        // Embeddable under a require-corp document, which the simulator's own
+        // origin does not claim to be.
         element.credentialless = true;
+      } else if (name === 'script' || name === 'link') {
+        // Fetched as CORS, which is the other way to satisfy that policy.
+        element.crossOrigin = 'anonymous';
       }
     } catch (e) {}
     return element;
