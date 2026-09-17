@@ -27,6 +27,7 @@ import { sameBlocks } from '../../shared/sameBlocks';
 import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/syncState';
 import {
   applyBlocksDirectly,
+  reportEditorApi,
   createBlobEditorUrl,
   isWorkspaceBusy,
   probeEditor,
@@ -64,6 +65,8 @@ const POLL_MS = 120;
 let reach: EditorReach | undefined;
 let pollTimer: number | undefined;
 let lastPolled: string | undefined;
+/** The editor's API is reported once, not on every probe. */
+let reportedApi = false;
 
 /**
  * Starts the editor, same-origin when asked for.
@@ -110,6 +113,12 @@ function probeOnce(): void {
   }
 
   if (reach.sameOrigin && reach.workspace) {
+    if (!reportedApi && reach.detail.includes('xml=false')) {
+      // The workspace can be reached but not written to. Say exactly what the
+      // editor does expose, rather than spending a build on each guess.
+      reportedApi = true;
+      reportEditorApi(frame.contentWindow as any, reach.workspace);
+    }
     showStatus(undefined);
     startDirectPolling();
     return;

@@ -657,6 +657,60 @@ function findWorkspaceViaReact(view: any): any {
 }
 
 /**
+ * Every name on an object, its class's methods included.
+ *
+ * `Object.keys` is not enough for the editor's objects: its React components and
+ * Blockly's workspace keep their behaviour on their prototypes, so the methods
+ * that could drive the workspace are exactly what a plain key list leaves out.
+ */
+function namesOf(value: any, limit = 40): string {
+  if (!value) {
+    return 'none';
+  }
+  const names = new Set<string>();
+  try {
+    for (const name of Object.getOwnPropertyNames(value)) {
+      names.add(name);
+    }
+    const proto = Object.getPrototypeOf(value);
+    if (proto && proto !== Object.prototype) {
+      for (const name of Object.getOwnPropertyNames(proto)) {
+        if (name !== 'constructor') {
+          names.add(name);
+        }
+      }
+    }
+  } catch {
+    return 'unreadable';
+  }
+  const list = [...names];
+  return list.slice(0, limit).join(',') + (list.length > limit ? `…+${list.length - limit}` : '');
+}
+
+/**
+ * Reports what the editor exposes, once, when the workspace can be reached but
+ * not written to.
+ *
+ * Blockly's Xml helpers are what applying a change needs, and in this build they
+ * are not reachable — so the question becomes which of pxt's own helpers can do
+ * the same job. Guessing at that costs a build and a round trip each time; this
+ * answers it in one.
+ */
+export function reportEditorApi(view: any, workspace: any): void {
+  const opts = view.__arcadeOpts;
+  const projectView = opts?.projectView;
+  const lines = [
+    `pxt: ${namesOf(view.pxt, 30)}`,
+    `pxt.blocks: ${namesOf(view.pxt?.blocks, 40)}`,
+    `pxt.editor: ${namesOf(view.pxt?.editor, 30)}`,
+    `blocksEditor: ${namesOf(projectView?.blocksEditor, 40)}`,
+    `projectView: ${namesOf(projectView, 30)}`,
+    `workspace: ${namesOf(workspace, 40)}`,
+  ];
+  console.log(`[blocks] editor API —\n${lines.join('\n')}`);
+}
+
+/**
  * Walks an object looking for a workspace, to a bounded depth.
  *
  * Bounded because this runs while the editor is starting and the object graph

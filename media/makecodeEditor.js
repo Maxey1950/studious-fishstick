@@ -685,6 +685,43 @@
     }
     return void 0;
   }
+  function namesOf(value, limit = 40) {
+    if (!value) {
+      return "none";
+    }
+    const names = /* @__PURE__ */ new Set();
+    try {
+      for (const name of Object.getOwnPropertyNames(value)) {
+        names.add(name);
+      }
+      const proto = Object.getPrototypeOf(value);
+      if (proto && proto !== Object.prototype) {
+        for (const name of Object.getOwnPropertyNames(proto)) {
+          if (name !== "constructor") {
+            names.add(name);
+          }
+        }
+      }
+    } catch {
+      return "unreadable";
+    }
+    const list = [...names];
+    return list.slice(0, limit).join(",") + (list.length > limit ? `\u2026+${list.length - limit}` : "");
+  }
+  function reportEditorApi(view, workspace) {
+    const opts = view.__arcadeOpts;
+    const projectView = opts?.projectView;
+    const lines = [
+      `pxt: ${namesOf(view.pxt, 30)}`,
+      `pxt.blocks: ${namesOf(view.pxt?.blocks, 40)}`,
+      `pxt.editor: ${namesOf(view.pxt?.editor, 30)}`,
+      `blocksEditor: ${namesOf(projectView?.blocksEditor, 40)}`,
+      `projectView: ${namesOf(projectView, 30)}`,
+      `workspace: ${namesOf(workspace, 40)}`
+    ];
+    console.log(`[blocks] editor API \u2014
+${lines.join("\n")}`);
+  }
   function descend(value, depth, test) {
     if (!value || depth < 0 || isFrame(value)) {
       return void 0;
@@ -936,6 +973,7 @@
   var reach;
   var pollTimer;
   var lastPolled;
+  var reportedApi = false;
   async function startEditor(sameOrigin, requireCorp) {
     if (!sameOrigin) {
       loadEditor(ARCADE_EDITOR_URL);
@@ -959,6 +997,10 @@
       console.log(`[blocks] reach \u2014 ${reach.detail}`);
     }
     if (reach.sameOrigin && reach.workspace) {
+      if (!reportedApi && reach.detail.includes("xml=false")) {
+        reportedApi = true;
+        reportEditorApi(frame.contentWindow, reach.workspace);
+      }
       showStatus(void 0);
       startDirectPolling();
       return;
