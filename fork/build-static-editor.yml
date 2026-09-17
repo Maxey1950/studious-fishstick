@@ -20,6 +20,11 @@ on:
         description: 'Minify (smaller, slower build)'
         type: boolean
         default: true
+      node_version:
+        description: 'Node version (18 matches what pxt-arcade expects)'
+        type: choice
+        options: ['18', '16', '20']
+        default: '18'
 
 jobs:
   build:
@@ -32,18 +37,30 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # pxt-core 13 builds on modern LTS. If this fails early with a syntax
-          # or engine error, try '18'.
-          node-version: '20'
+          # pxt-arcade pins typescript 4.8 and @types/node ^9. Building it on a
+          # newer Node produces a flood of type errors from that mismatch alone
+          # — over a hundred — rather than from anything actually wrong. 18 is
+          # what this generation of pxt was built against.
+          node-version: ${{ inputs.node_version }}
 
       - name: Install
-        run: npm install
+        # The dependency tree predates current peer-dependency rules, so npm
+        # refuses it outright without this.
+        run: npm install --legacy-peer-deps
 
       - name: Copy the simulator
         # pxt-arcade's own "copy-sim" script; the simulator is a separate piece
         # and staticpkg expects it in place.
         run: node ./scripts/copyArcadeSim.js
         continue-on-error: true
+
+      - name: Show versions
+        # Worth having in the log: nearly every failure here is a version
+        # mismatch rather than a real build problem.
+        run: |
+          node --version
+          npx tsc --version || true
+          node -e "const p=require('./package.json');console.log('pxt-core',p.dependencies['pxt-core'])"
 
       - name: Build the static editor
         # --route ./ makes every generated URL relative, which is required when
