@@ -15,10 +15,26 @@ export type HostMessage =
       remoteApplyDelayMs: number;
       /** Which strategy is hosting the editor; `blob` means same-origin. */
       embedElement: string;
+      /**
+       * True where the host page sets `Cross-Origin-Embedder-Policy:
+       * require-corp` — vscode.dev does, desktop VS Code does not. It decides
+       * whether the editor's own frames need the `credentialless` escape hatch,
+       * which costs them their storage partition and so is not applied for free.
+       */
+      requireCorp: boolean;
+      /**
+       * The rest of the project as it stands on disk — `pxt.json`,
+       * `assets.json`, `main.ts` — so the editor opens with the extensions and
+       * sprites everyone else has, not just the blocks.
+       */
+      files: Record<string, string>;
     }
   /** The underlying text document changed — from undo, a text editor on the
    * same file, or a Live Share participant. */
-  | { type: 'update'; xml: string };
+  | { type: 'update'; xml: string }
+  /** A project file beside the document changed: someone added an extension or
+   * painted a sprite. */
+  | { type: 'projectUpdate'; files: Record<string, string> };
 
 /** Webview -> extension host. */
 export type WebviewMessage =
@@ -26,6 +42,9 @@ export type WebviewMessage =
   | { type: 'ready' }
   /** The user changed the blocks; `xml` is the full serialized workspace. */
   | { type: 'edit'; xml: string }
+  /** The editor changed part of the project other than its blocks — an added
+   * extension, an edited sprite — and it should be written beside the file. */
+  | { type: 'projectFiles'; files: Record<string, string> }
   /** Something went wrong in the webview and should surface to the user. */
   | { type: 'error'; message: string }
   /** Non-fatal note (e.g. unknown MakeCode block types were stubbed). */

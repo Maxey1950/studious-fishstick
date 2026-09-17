@@ -42,7 +42,7 @@ export interface EditorReach {
  * A `<base>` is injected because the fetched markup refers to its assets
  * relatively; without one they would resolve against the blob URL and 404.
  */
-export async function createBlobEditorUrl(): Promise<string> {
+export async function createBlobEditorUrl(requireCorp: boolean): Promise<string> {
   const response = await fetch(ARCADE_EDITOR_URL, { credentials: 'omit' });
   if (!response.ok) {
     throw new Error(`MakeCode returned ${response.status}`);
@@ -65,16 +65,24 @@ export async function createBlobEditorUrl(): Promise<string> {
   // drive. Restoring the query from inside the document, before its own scripts
   // run, puts it back in controller mode.
   // The simulator lives in a cross-origin iframe of its own, one level inside
-  // the editor. On vscode.dev the webview is a require-corp document and this
-  // blob inherits that policy, under which a cross-origin frame must assert
-  // COEP itself — MakeCode's simulator origin does not, so the frame would be
-  // refused and the simulator would simply not appear. `credentialless` is the
-  // same escape hatch used for the editor itself, applied one level down.
-  const framed = absolute.replace(/<iframe(\s)/gi, '<iframe credentialless$1');
+  // the editor. Where the webview is a require-corp document — vscode.dev — this
+  // blob inherits that policy, under which a cross-origin frame must assert COEP
+  // itself; MakeCode's simulator origin does not, so the frame is refused and
+  // the simulator never appears. `credentialless` is the same escape hatch used
+  // for the editor itself, applied one level down.
+  //
+  // Only where it is needed, though. A credentialless frame is loaded without
+  // credentials and into an ephemeral storage partition, and the simulator
+  // registers a service worker — so applying it in desktop VS Code, which sets
+  // no such policy, takes the simulator away to solve a problem that is not
+  // there.
+  const framed = requireCorp
+    ? absolute.replace(/<iframe(\s)/gi, '<iframe credentialless$1')
+    : absolute;
 
   const patched = framed.replace(
     /<head([^>]*)>/i,
-    `<head$1><base href="${origin}/">${controllerShim()}${FRAME_SHIM}${WORKER_SHIM}`
+    `<head$1><base href="${origin}/">${controllerShim()}${requireCorp ? FRAME_SHIM : ''}${WORKER_SHIM}`
   );
   if (!patched.includes('<base')) {
     throw new Error('could not find a <head> to anchor the editor’s asset paths');
@@ -303,14 +311,35 @@ function findWorkspace(view: any): any {
   return scanForWorkspace(view);
 }
 
-/** A workspace is whatever can list its blocks and be driven. */
+/**
+ * A workspace is whatever can list its blocks and be driven.
+ *
+ * Every property read here is guarded, because the editor's own window carries
+ * its child frames as properties — the simulator among them — and reading any
+ * property of a cross-origin frame throws a SecurityError rather than returning
+ * undefined.
+ */
 function isWorkspace(value: any): boolean {
-  return Boolean(
-    value &&
-      typeof value.getAllBlocks === 'function' &&
-      typeof value.getTopBlocks === 'function' &&
-      typeof value.newBlock === 'function'
-  );
+  try {
+    return Boolean(
+      value &&
+        typeof value.getAllBlocks === 'function' &&
+        typeof value.getTopBlocks === 'function' &&
+        typeof value.newBlock === 'function'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** True for a Window, which is never a workspace and may throw when read. */
+function isFrame(value: any): boolean {
+  try {
+    return Boolean(value) && typeof value === 'object' && value.window === value;
+  } catch {
+    // Only a cross-origin Window throws on that read, so that is what it is.
+    return true;
+  }
 }
 
 /**
@@ -323,7 +352,7 @@ function scanForWorkspace(view: any): any {
   const seen = new Set<any>();
 
   const test = (value: any): any => {
-    if (!value || seen.has(value)) {
+    if (!value || seen.has(value) || isFrame(value)) {
       return undefined;
     }
     seen.add(value);
@@ -367,6 +396,9 @@ function scanForWorkspace(view: any): any {
       continue;
     }
     if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
+      continue;
+    }
+    if (isFrame(value)) {
       continue;
     }
 

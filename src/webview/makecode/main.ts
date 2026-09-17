@@ -22,6 +22,7 @@ import {
   withBlocks,
   type ArcadeProject,
 } from '../../shared/arcadeProtocol';
+import { changedFiles, sharedFiles, withFiles } from '../../shared/projectFiles';
 import { sameBlocks } from '../../shared/sameBlocks';
 import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/syncState';
 import {
@@ -70,7 +71,7 @@ let lastPolled: string | undefined;
  * A failed experiment should leave a working editor rather than a blank panel,
  * so anything going wrong here falls back to the ordinary cross-origin load.
  */
-async function startEditor(sameOrigin: boolean): Promise<void> {
+async function startEditor(sameOrigin: boolean, requireCorp: boolean): Promise<void> {
   if (!sameOrigin) {
     loadEditor(ARCADE_EDITOR_URL);
     return;
@@ -78,7 +79,7 @@ async function startEditor(sameOrigin: boolean): Promise<void> {
 
   showStatus('Loading the MakeCode Arcade editor (same-origin)\u2026');
   try {
-    loadEditor(await createBlobEditorUrl());
+    loadEditor(await createBlobEditorUrl(requireCorp));
   } catch (error) {
     showStatus(`Same-origin load failed (${describe(error)}); using the standard editor.`);
     loadEditor(ARCADE_EDITOR_URL);
@@ -156,6 +157,14 @@ let timer: number | undefined;
 /** The document as the extension last reported it, for the safety check below. */
 let documentBlocks = '';
 /**
+ * The project files as they stand on disk, as last read or written.
+ *
+ * The editor reports its whole project on every change, so without this every
+ * block move would rewrite `pxt.json` and `assets.json` untouched — churn in
+ * the folder, and a stream of file changes for everyone else to receive.
+ */
+let hostFiles: Record<string, string> = {};
+/**
  * While set, the editor is still settling after an import and anything it
  * reports is an echo of that import rather than a person's edit.
  *
@@ -213,6 +222,22 @@ function pump(): void {
       timer = setTimeout(pump, Math.max(50, effect.untilMs - Date.now())) as unknown as number;
       return;
   }
+}
+
+/**
+ * Sends on the parts of the project that changed outside the blocks.
+ *
+ * Extensions and assets belong to everyone working on the file, not to whoever
+ * happened to add them: a block referring to a sprite the others do not have is
+ * a block they cannot use.
+ */
+function shareProjectFiles(): void {
+  const changed = changedFiles(hostFiles, sharedFiles(project.text));
+  if (!Object.keys(changed).length) {
+    return;
+  }
+  hostFiles = { ...hostFiles, ...changed };
+  post({ type: 'projectFiles', files: changed });
 }
 
 /**
@@ -355,6 +380,10 @@ window.addEventListener('message', (event: MessageEvent) => {
         sync.onLocalChange(blocks, Date.now());
         pump();
       }
+      // An added extension or an edited sprite changes the project without
+      // changing a single block, so this is checked whether or not the blocks
+      // moved.
+      shareProjectFiles();
       return;
     }
 
@@ -380,13 +409,16 @@ function handleHostMessage(message: HostMessage): void {
         applyAfterIdleMs: message.remoteApplyDelayMs,
       };
       documentBlocks = message.xml;
-      project = createProject('blocks', message.xml);
+      hostFiles = { ...message.files };
+      // Open with the project's real extensions and assets, not a bare shell —
+      // otherwise the first save would report them as deleted.
+      project = withFiles(createProject('blocks', message.xml), message.files);
       sync = new SyncState(syncOptions);
       sync.onRemoteChange(message.xml, Date.now());
       if (!booted) {
         booted = true;
         showStatus('Loading the MakeCode Arcade editor…');
-        void startEditor(message.embedElement === 'blob');
+        void startEditor(message.embedElement === 'blob', message.requireCorp);
         // The editor asks for the project itself once it is up; the pending
         // remote change is consumed by that request rather than by an import.
         sync.next(Date.now());
@@ -394,6 +426,18 @@ function handleHostMessage(message: HostMessage): void {
         pump();
       }
       return;
+
+    case 'projectUpdate': {
+      // Someone added an extension or painted a sprite. The editor only reads
+      // these when it loads a project, so the change is folded into what we
+      // hold and reaches it with the next one.
+      hostFiles = { ...hostFiles, ...message.files };
+      project = withFiles(project, message.files);
+      frame.contentWindow?.postMessage(importProjectMessage(project), '*');
+      settlingUntil = Date.now() + SETTLE_MS;
+      showStatus(undefined);
+      return;
+    }
 
     case 'update':
       documentBlocks = message.xml;

@@ -86,6 +86,48 @@
     };
   }
 
+  // src/shared/projectFiles.ts
+  var SHARED_FILES = ["pxt.json", "assets.json", "main.ts"];
+  function isShared(name) {
+    return SHARED_FILES.includes(name);
+  }
+  function sharedFiles(text) {
+    const files = {};
+    for (const name of SHARED_FILES) {
+      const content = text[name];
+      if (typeof content === "string") {
+        files[name] = content;
+      }
+    }
+    return files;
+  }
+  function changedFiles(previous, next) {
+    const changed = {};
+    for (const [name, content] of Object.entries(next)) {
+      if (!isShared(name)) {
+        continue;
+      }
+      const before = previous[name];
+      if (content === before || isEmpty(content)) {
+        continue;
+      }
+      changed[name] = content;
+    }
+    return changed;
+  }
+  function isEmpty(content) {
+    return content === void 0 || content.trim() === "";
+  }
+  function withFiles(project2, files) {
+    const text = { ...project2.text };
+    for (const [name, content] of Object.entries(files)) {
+      if (isShared(name)) {
+        text[name] = content;
+      }
+    }
+    return { ...project2, text };
+  }
+
   // src/shared/sameBlocks.ts
   function sameBlocks(a, b) {
     if (a === b) {
@@ -190,7 +232,7 @@
   };
 
   // src/webview/makecode/sameOrigin.ts
-  async function createBlobEditorUrl() {
+  async function createBlobEditorUrl(requireCorp) {
     const response = await fetch(ARCADE_EDITOR_URL, { credentials: "omit" });
     if (!response.ok) {
       throw new Error(`MakeCode returned ${response.status}`);
@@ -198,10 +240,10 @@
     const html = await response.text();
     const origin = new URL(ARCADE_EDITOR_URL).origin;
     const absolute = html.replace(/"\/---/g, `"${origin}/---`);
-    const framed = absolute.replace(/<iframe(\s)/gi, "<iframe credentialless$1");
+    const framed = requireCorp ? absolute.replace(/<iframe(\s)/gi, "<iframe credentialless$1") : absolute;
     const patched = framed.replace(
       /<head([^>]*)>/i,
-      `<head$1><base href="${origin}/">${controllerShim()}${FRAME_SHIM}${WORKER_SHIM}`
+      `<head$1><base href="${origin}/">${controllerShim()}${requireCorp ? FRAME_SHIM : ""}${WORKER_SHIM}`
     );
     if (!patched.includes("<base")) {
       throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");
@@ -348,14 +390,25 @@
     return scanForWorkspace(view);
   }
   function isWorkspace(value) {
-    return Boolean(
-      value && typeof value.getAllBlocks === "function" && typeof value.getTopBlocks === "function" && typeof value.newBlock === "function"
-    );
+    try {
+      return Boolean(
+        value && typeof value.getAllBlocks === "function" && typeof value.getTopBlocks === "function" && typeof value.newBlock === "function"
+      );
+    } catch {
+      return false;
+    }
+  }
+  function isFrame(value) {
+    try {
+      return Boolean(value) && typeof value === "object" && value.window === value;
+    } catch {
+      return true;
+    }
   }
   function scanForWorkspace(view) {
     const seen = /* @__PURE__ */ new Set();
     const test = (value) => {
-      if (!value || seen.has(value)) {
+      if (!value || seen.has(value) || isFrame(value)) {
         return void 0;
       }
       seen.add(value);
@@ -395,6 +448,9 @@
         continue;
       }
       if (!value || typeof value !== "object" && typeof value !== "function") {
+        continue;
+      }
+      if (isFrame(value)) {
         continue;
       }
       const direct = test(value);
@@ -622,14 +678,14 @@
   var reach;
   var pollTimer;
   var lastPolled;
-  async function startEditor(sameOrigin) {
+  async function startEditor(sameOrigin, requireCorp) {
     if (!sameOrigin) {
       loadEditor(ARCADE_EDITOR_URL);
       return;
     }
     showStatus("Loading the MakeCode Arcade editor (same-origin)\u2026");
     try {
-      loadEditor(await createBlobEditorUrl());
+      loadEditor(await createBlobEditorUrl(requireCorp));
     } catch (error) {
       showStatus(`Same-origin load failed (${describe2(error)}); using the standard editor.`);
       loadEditor(ARCADE_EDITOR_URL);
@@ -682,6 +738,7 @@
   var booted = false;
   var timer;
   var documentBlocks = "";
+  var hostFiles = {};
   var settlingUntil = 0;
   var SETTLE_MS = 2500;
   var deferredApply;
@@ -720,6 +777,14 @@
         timer = setTimeout(pump, Math.max(50, effect.untilMs - Date.now()));
         return;
     }
+  }
+  function shareProjectFiles() {
+    const changed = changedFiles(hostFiles, sharedFiles(project.text));
+    if (!Object.keys(changed).length) {
+      return;
+    }
+    hostFiles = { ...hostFiles, ...changed };
+    post({ type: "projectFiles", files: changed });
   }
   var simulatorTimer;
   function scheduleSimulatorRestart() {
@@ -794,6 +859,7 @@
           sync.onLocalChange(blocks, Date.now());
           pump();
         }
+        shareProjectFiles();
         return;
       }
       case "status":
@@ -814,18 +880,27 @@
           applyAfterIdleMs: message.remoteApplyDelayMs
         };
         documentBlocks = message.xml;
-        project = createProject("blocks", message.xml);
+        hostFiles = { ...message.files };
+        project = withFiles(createProject("blocks", message.xml), message.files);
         sync = new SyncState(syncOptions);
         sync.onRemoteChange(message.xml, Date.now());
         if (!booted) {
           booted = true;
           showStatus("Loading the MakeCode Arcade editor\u2026");
-          void startEditor(message.embedElement === "blob");
+          void startEditor(message.embedElement === "blob", message.requireCorp);
           sync.next(Date.now());
         } else {
           pump();
         }
         return;
+      case "projectUpdate": {
+        hostFiles = { ...hostFiles, ...message.files };
+        project = withFiles(project, message.files);
+        frame.contentWindow?.postMessage(importProjectMessage(project), "*");
+        settlingUntil = Date.now() + SETTLE_MS;
+        showStatus(void 0);
+        return;
+      }
       case "update":
         documentBlocks = message.xml;
         sync.onRemoteChange(message.xml, Date.now());

@@ -1,5 +1,12 @@
 import * as vscode from 'vscode';
 import type { HostMessage, RendererName, WebviewMessage } from './protocol';
+import {
+  SHARED_FILES,
+  changedFiles,
+  isEmpty,
+  withDeclaredFiles,
+  type ProjectText,
+} from './shared/projectFiles';
 import { minimalReplacement } from './textDiff';
 
 /**
@@ -14,6 +21,15 @@ import { minimalReplacement } from './textDiff';
  */
 export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = 'blocksEditor.blocks';
+
+  /**
+   * The project files beside each open document, as last read or written.
+   *
+   * Kept so a change can be recognized as one we caused. Writing `assets.json`
+   * makes the watcher fire, which would look exactly like a collaborator
+   * painting a sprite, and be sent back to the editor that just produced it.
+   */
+  private readonly projectFiles = new Map<string, ProjectText>();
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -59,6 +75,14 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
 
     const disposables: vscode.Disposable[] = [];
 
+    // Read what is already beside the file, so the editor opens with the
+    // project's extensions and sprites rather than discovering them later.
+    await this.loadProjectFiles(document);
+
+    disposables.push(
+      this.watchProjectFiles(document, (files) => post({ type: 'projectUpdate', files }))
+    );
+
     disposables.push(
       vscode.workspace.onDidChangeTextDocument((event) => {
         if (event.document.uri.toString() !== document.uri.toString()) {
@@ -102,6 +126,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
             lastTextFromWebview = message.xml;
             await this.writeBack(document, message.xml);
             return;
+          case 'projectFiles':
+            await this.writeProjectFiles(document, message.files);
+            return;
           case 'error':
             void vscode.window.showErrorMessage(`Blocks Editor: ${message.message}`);
             return;
@@ -134,11 +161,16 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     );
     return {
       xml: document.getText(),
+      files: this.projectFiles.get(document.uri.toString()) ?? {},
       renderer: config.get<RendererName>('renderer', 'pxt'),
       editable: !this.isReadOnly(document),
       debounceMs: config.get<number>('writeDebounceMs', 100),
       remoteApplyDelayMs: config.get<number>('remoteApplyDelayMs', 150),
       embedElement: this.embedElementFor(document),
+      // vscode.dev serves its pages with an embedder policy that desktop VS
+      // Code does not set, and the difference decides how the editor's frames
+      // have to be loaded.
+      requireCorp: vscode.env.uiKind === vscode.UIKind.Web,
       // Blockly resolves its sprites and cursors relative to this, and wants a
       // trailing slash.
       mediaUri: `${mediaUri.toString()}/`,
@@ -156,6 +188,127 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
    * Writes the serialized workspace back to the document as the narrowest edit
    * that produces it, so concurrent Live Share edits to other blocks survive.
    */
+  /** Where a project file lives: beside the `.blocks` file. */
+  private siblingUri(document: vscode.TextDocument, name: string): vscode.Uri {
+    return vscode.Uri.joinPath(document.uri, '..', name);
+  }
+
+  /** Reads the project files beside the document into the cache. */
+  private async loadProjectFiles(document: vscode.TextDocument): Promise<ProjectText> {
+    const files: ProjectText = {};
+    await Promise.all(
+      SHARED_FILES.map(async (name) => {
+        try {
+          const bytes = await vscode.workspace.fs.readFile(this.siblingUri(document, name));
+          files[name] = new TextDecoder().decode(bytes);
+        } catch {
+          // Not every project has every file, and a project may be a lone
+          // `.blocks` file with nothing beside it at all.
+        }
+      })
+    );
+    this.projectFiles.set(document.uri.toString(), files);
+    return files;
+  }
+
+  /**
+   * Writes the project files the editor produced, and shares them.
+   *
+   * These are ordinary files in the workspace folder, so Live Share replicates
+   * them exactly as it replicates the `.blocks` document — which is why there is
+   * still no Live Share code anywhere in this extension.
+   */
+  private async writeProjectFiles(
+    document: vscode.TextDocument,
+    incoming: ProjectText
+  ): Promise<void> {
+    const key = document.uri.toString();
+    const known = this.projectFiles.get(key) ?? {};
+    const changed = changedFiles(known, incoming);
+    if (!Object.keys(changed).length) {
+      return;
+    }
+
+    // An `assets.json` MakeCode does not know about is invisible in the editor,
+    // which is worse than not sharing it — the sprites would be on disk and
+    // missing from every picker.
+    if (changed['assets.json'] !== undefined) {
+      const config = changed['pxt.json'] ?? known['pxt.json'];
+      if (config !== undefined) {
+        const declared = withDeclaredFiles(config, ['assets.json']);
+        if (declared !== config) {
+          changed['pxt.json'] = declared;
+        }
+      }
+    }
+
+    const written: ProjectText = { ...known };
+    for (const [name, content] of Object.entries(changed)) {
+      try {
+        await vscode.workspace.fs.writeFile(
+          this.siblingUri(document, name),
+          new TextEncoder().encode(content)
+        );
+        written[name] = content;
+      } catch (error) {
+        // A read-only workspace, or a Live Share guest without write access.
+        // The blocks still sync; say so once rather than failing silently.
+        void vscode.window.showWarningMessage(
+          `Blocks Editor: could not save ${name} (${describeError(error)}). ` +
+            'Blocks are still being shared.'
+        );
+        return;
+      }
+    }
+    this.projectFiles.set(key, written);
+  }
+
+  /**
+   * Watches the project files beside the document.
+   *
+   * Changes we made ourselves are filtered out here rather than in the webview:
+   * writing `assets.json` fires the watcher, and without this it would arrive
+   * back at the editor that produced it looking like somebody else's edit.
+   */
+  private watchProjectFiles(
+    document: vscode.TextDocument,
+    onChanged: (files: ProjectText) => void
+  ): vscode.Disposable {
+    const folder = vscode.Uri.joinPath(document.uri, '..');
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, `{${SHARED_FILES.join(',')}}`)
+    );
+
+    const reread = async (uri: vscode.Uri): Promise<void> => {
+      const name = uri.path.split('/').pop();
+      if (!name) {
+        return;
+      }
+      const key = document.uri.toString();
+      const known = this.projectFiles.get(key) ?? {};
+      let content: string;
+      try {
+        content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+      } catch {
+        return;
+      }
+      if (content === known[name]) {
+        // Our own write coming back.
+        return;
+      }
+      if (isEmpty(content) && !isEmpty(known[name])) {
+        // A half-written file caught mid-save is not somebody emptying it.
+        return;
+      }
+      this.projectFiles.set(key, { ...known, [name]: content });
+      onChanged({ [name]: content });
+    };
+
+    watcher.onDidChange((uri) => void reread(uri));
+    watcher.onDidCreate((uri) => void reread(uri));
+    return watcher;
+  }
+
   private async writeBack(document: vscode.TextDocument, xml: string): Promise<void> {
     const current = document.getText();
     const change = minimalReplacement(current, xml);
@@ -381,4 +534,8 @@ function createNonce(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
