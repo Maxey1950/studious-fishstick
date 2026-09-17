@@ -118,6 +118,10 @@ function controllerShim(): string {
   // module, so the global object does not answer getMainWorkspace and there is
   // no registry to ask afterwards — but whatever creates the canvas has to call
   // inject, and wrapping that captures the workspace it returns.
+  //
+  // In the shipped build the real Blockly never reaches the window at all: what
+  // is there is a stub carrying only Msg. So this is a best effort, and the
+  // route below is the one that works.
   var injectTimer = setInterval(function () {
     var B = window.Blockly;
     if (B && B.inject && !B.__arcadeWrapped) {
@@ -127,9 +131,6 @@ function controllerShim(): string {
           var workspace = nativeInject.apply(this, arguments);
           try {
             window.__arcadeWorkspace = workspace;
-            // Keep the namespace that was actually called, not the one guessed
-            // at from outside: its Xml helpers are needed to drive the
-            // workspace, and the global may be a different object.
             window.__arcadeBlockly = this || B;
           } catch (e) {}
           return workspace;
@@ -140,6 +141,35 @@ function controllerShim(): string {
     } else if (Date.now() - started > 15000) {
       clearInterval(injectTimer);
     }
+  }, 2);
+
+  // The route that actually reaches the editor.
+  //
+  // pxt.editor.initExtensionsAsync is a hook the target fills in and the editor
+  // calls once during startup, handing it the running ProjectView. That object
+  // owns the blocks editor, and the blocks editor owns the live Blockly
+  // workspace — so wrapping the hook gets us both without either ever being a
+  // global. Wrapping preserves the target's own function; we only watch it
+  // being called.
+  var editorTimer = setInterval(function () {
+    var editor = window.pxt && window.pxt.editor;
+    if (!editor) {
+      if (Date.now() - started > 15000) { clearInterval(editorTimer); }
+      return;
+    }
+    ['initExtensionsAsync', 'initFieldExtensionsAsync'].forEach(function (name) {
+      var native = editor[name];
+      if (typeof native !== 'function' || native.__arcadeWrapped) { return; }
+      var wrapped = function (opts) {
+        try {
+          window.__arcadeOpts = opts;
+        } catch (e) {}
+        return native.apply(this, arguments);
+      };
+      wrapped.__arcadeWrapped = true;
+      editor[name] = wrapped;
+    });
+    clearInterval(editorTimer);
   }, 2);
 
   var timer = setInterval(function () {
@@ -237,6 +267,9 @@ const WORKER_SHIM = `<script>(function () {
  * helpers needed to drive a workspace.
  */
 function blocklyOf(view: any, workspace?: any): any {
+  if (view.__arcadeNamespace?.Xml) {
+    return view.__arcadeNamespace;
+  }
   const candidate = view.__arcadeBlockly ?? view.Blockly;
   if (candidate?.Xml) {
     return candidate;
@@ -258,7 +291,58 @@ function blocklyOf(view: any, workspace?: any): any {
       // Try the next.
     }
   }
+
+  // Nothing named it, so go looking. In the shipped build the window's Blockly
+  // is a stub carrying only Msg — the real one is a bundled module — but the
+  // object graph the editor handed its extension hook reaches the live editor,
+  // and something in there holds the namespace that built the workspace.
+  const found = findBlockly(view);
+  if (found) {
+    try {
+      view.__arcadeNamespace = found;
+    } catch {
+      // Not being able to cache it only costs another search.
+    }
+    return found;
+  }
   return candidate;
+}
+
+/** The real Blockly namespace: the one that can parse and build blocks. */
+function isBlockly(value: any): boolean {
+  try {
+    return Boolean(
+      value &&
+        value.Xml &&
+        typeof value.Xml.domToText === 'function' &&
+        typeof value.Xml.domToBlock === 'function' &&
+        value.Events &&
+        typeof value.Events.disable === 'function'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Looks for the Blockly namespace anywhere the editor's own objects reach. */
+function findBlockly(view: any): any {
+  const test = (value: any): any => (isBlockly(value) ? value : undefined);
+  const seen = new Set<any>();
+  const guarded = (value: any): any => {
+    if (!value || seen.has(value)) {
+      return undefined;
+    }
+    seen.add(value);
+    return test(value);
+  };
+
+  for (const root of [view.__arcadeOpts, view.pxt, view.pxtblockly, view.pxtblocks]) {
+    const found = descend(root, 4, guarded);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -307,6 +391,10 @@ function findWorkspace(view: any): any {
     // Captured by the shim as the editor injected it; the reliable route, since
     // MakeCode's Blockly is a bundled module with no global registry to query.
     () => view.__arcadeWorkspace,
+    // Through the ProjectView the editor handed to its own extension hook.
+    () => view.__arcadeOpts?.projectView?.blocksEditor?.editor,
+    () => view.__arcadeOpts?.projectView?.editor?.editor,
+    () => view.__arcadeOpts?.projectView?.blocksEditor?.workspace,
     () => view.Blockly?.getMainWorkspace?.(),
     () => view.Blockly?.common?.getMainWorkspace?.(),
     () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
@@ -404,6 +492,13 @@ function scanForWorkspace(view: any): any {
     return undefined;
   };
 
+  // The captured options first: the workspace is in there, several layers down,
+  // and nothing else on the window holds it at all.
+  const deep = descend(view.__arcadeOpts, 4, test);
+  if (deep) {
+    return deep;
+  }
+
   let names: string[];
   try {
     names = Object.getOwnPropertyNames(view);
@@ -451,6 +546,48 @@ function scanForWorkspace(view: any): any {
       if (found) {
         return found;
       }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Walks an object looking for a workspace, to a bounded depth.
+ *
+ * Bounded because this runs while the editor is starting and the object graph
+ * it is handed loops back on itself in several places.
+ */
+function descend(value: any, depth: number, test: (value: any) => any): any {
+  if (!value || depth < 0 || isFrame(value)) {
+    return undefined;
+  }
+  const found = test(value);
+  if (found) {
+    return found;
+  }
+  if (depth === 0) {
+    return undefined;
+  }
+
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return undefined;
+  }
+  for (const key of keys) {
+    let child: any;
+    try {
+      child = value[key];
+    } catch {
+      continue;
+    }
+    if (!child || (typeof child !== 'object' && typeof child !== 'function')) {
+      continue;
+    }
+    const inside = descend(child, depth - 1, test);
+    if (inside) {
+      return inside;
     }
   }
   return undefined;
@@ -508,6 +645,25 @@ function describeEditorState(view: any): string {
     })
     .map(([name]) => name as string);
   facts.push(`routes=${routes.join('/') || 'none'}`);
+
+  // What the editor handed its own extension hook, which is the one object
+  // graph that reaches the live editor. If the workspace is not in here, it is
+  // not anywhere this code can get to.
+  try {
+    const opts = view.__arcadeOpts;
+    facts.push(`opts=${opts ? Object.keys(opts).slice(0, 8).join(',') || 'empty' : 'none'}`);
+    const projectView = opts?.projectView;
+    facts.push(
+      `projectView=${projectView ? Object.keys(projectView).slice(0, 12).join(',') : 'none'}`
+    );
+    const blocksEditor = projectView?.blocksEditor;
+    facts.push(
+      `blocksEditor=${blocksEditor ? Object.keys(blocksEditor).slice(0, 12).join(',') : 'none'}`
+    );
+    facts.push(`namespace=${Boolean(findBlockly(view))}`);
+  } catch {
+    facts.push('opts=unreadable');
+  }
 
   return facts.join(' ');
 }

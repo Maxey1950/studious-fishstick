@@ -306,6 +306,10 @@
   // module, so the global object does not answer getMainWorkspace and there is
   // no registry to ask afterwards \u2014 but whatever creates the canvas has to call
   // inject, and wrapping that captures the workspace it returns.
+  //
+  // In the shipped build the real Blockly never reaches the window at all: what
+  // is there is a stub carrying only Msg. So this is a best effort, and the
+  // route below is the one that works.
   var injectTimer = setInterval(function () {
     var B = window.Blockly;
     if (B && B.inject && !B.__arcadeWrapped) {
@@ -315,9 +319,6 @@
           var workspace = nativeInject.apply(this, arguments);
           try {
             window.__arcadeWorkspace = workspace;
-            // Keep the namespace that was actually called, not the one guessed
-            // at from outside: its Xml helpers are needed to drive the
-            // workspace, and the global may be a different object.
             window.__arcadeBlockly = this || B;
           } catch (e) {}
           return workspace;
@@ -328,6 +329,35 @@
     } else if (Date.now() - started > 15000) {
       clearInterval(injectTimer);
     }
+  }, 2);
+
+  // The route that actually reaches the editor.
+  //
+  // pxt.editor.initExtensionsAsync is a hook the target fills in and the editor
+  // calls once during startup, handing it the running ProjectView. That object
+  // owns the blocks editor, and the blocks editor owns the live Blockly
+  // workspace \u2014 so wrapping the hook gets us both without either ever being a
+  // global. Wrapping preserves the target's own function; we only watch it
+  // being called.
+  var editorTimer = setInterval(function () {
+    var editor = window.pxt && window.pxt.editor;
+    if (!editor) {
+      if (Date.now() - started > 15000) { clearInterval(editorTimer); }
+      return;
+    }
+    ['initExtensionsAsync', 'initFieldExtensionsAsync'].forEach(function (name) {
+      var native = editor[name];
+      if (typeof native !== 'function' || native.__arcadeWrapped) { return; }
+      var wrapped = function (opts) {
+        try {
+          window.__arcadeOpts = opts;
+        } catch (e) {}
+        return native.apply(this, arguments);
+      };
+      wrapped.__arcadeWrapped = true;
+      editor[name] = wrapped;
+    });
+    clearInterval(editorTimer);
   }, 2);
 
   var timer = setInterval(function () {
@@ -382,6 +412,9 @@
   window.Worker.prototype = Native.prototype;
 }());<\/script>`;
   function blocklyOf(view, workspace) {
+    if (view.__arcadeNamespace?.Xml) {
+      return view.__arcadeNamespace;
+    }
     const candidate = view.__arcadeBlockly ?? view.Blockly;
     if (candidate?.Xml) {
       return candidate;
@@ -392,14 +425,49 @@
       () => workspace?.constructor?.Blockly
     ]) {
       try {
-        const found = route();
-        if (found?.Xml) {
-          return found;
+        const found2 = route();
+        if (found2?.Xml) {
+          return found2;
         }
       } catch {
       }
     }
+    const found = findBlockly(view);
+    if (found) {
+      try {
+        view.__arcadeNamespace = found;
+      } catch {
+      }
+      return found;
+    }
     return candidate;
+  }
+  function isBlockly(value) {
+    try {
+      return Boolean(
+        value && value.Xml && typeof value.Xml.domToText === "function" && typeof value.Xml.domToBlock === "function" && value.Events && typeof value.Events.disable === "function"
+      );
+    } catch {
+      return false;
+    }
+  }
+  function findBlockly(view) {
+    const test = (value) => isBlockly(value) ? value : void 0;
+    const seen = /* @__PURE__ */ new Set();
+    const guarded = (value) => {
+      if (!value || seen.has(value)) {
+        return void 0;
+      }
+      seen.add(value);
+      return test(value);
+    };
+    for (const root of [view.__arcadeOpts, view.pxt, view.pxtblockly, view.pxtblocks]) {
+      const found = descend(root, 4, guarded);
+      if (found) {
+        return found;
+      }
+    }
+    return void 0;
   }
   function probeEditor(frame2) {
     const view = frame2.contentWindow;
@@ -428,6 +496,10 @@
       // Captured by the shim as the editor injected it; the reliable route, since
       // MakeCode's Blockly is a bundled module with no global registry to query.
       () => view.__arcadeWorkspace,
+      // Through the ProjectView the editor handed to its own extension hook.
+      () => view.__arcadeOpts?.projectView?.blocksEditor?.editor,
+      () => view.__arcadeOpts?.projectView?.editor?.editor,
+      () => view.__arcadeOpts?.projectView?.blocksEditor?.workspace,
       () => view.Blockly?.getMainWorkspace?.(),
       () => view.Blockly?.common?.getMainWorkspace?.(),
       () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
@@ -492,6 +564,10 @@
       }
       return void 0;
     };
+    const deep = descend(view.__arcadeOpts, 4, test);
+    if (deep) {
+      return deep;
+    }
     let names;
     try {
       names = Object.getOwnPropertyNames(view);
@@ -539,6 +615,40 @@
     }
     return void 0;
   }
+  function descend(value, depth, test) {
+    if (!value || depth < 0 || isFrame(value)) {
+      return void 0;
+    }
+    const found = test(value);
+    if (found) {
+      return found;
+    }
+    if (depth === 0) {
+      return void 0;
+    }
+    let keys;
+    try {
+      keys = Object.keys(value);
+    } catch {
+      return void 0;
+    }
+    for (const key of keys) {
+      let child;
+      try {
+        child = value[key];
+      } catch {
+        continue;
+      }
+      if (!child || typeof child !== "object" && typeof child !== "function") {
+        continue;
+      }
+      const inside = descend(child, depth - 1, test);
+      if (inside) {
+        return inside;
+      }
+    }
+    return void 0;
+  }
   function describeEditorState(view) {
     const facts = [];
     try {
@@ -576,6 +686,21 @@
       }
     }).map(([name]) => name);
     facts.push(`routes=${routes.join("/") || "none"}`);
+    try {
+      const opts = view.__arcadeOpts;
+      facts.push(`opts=${opts ? Object.keys(opts).slice(0, 8).join(",") || "empty" : "none"}`);
+      const projectView = opts?.projectView;
+      facts.push(
+        `projectView=${projectView ? Object.keys(projectView).slice(0, 12).join(",") : "none"}`
+      );
+      const blocksEditor = projectView?.blocksEditor;
+      facts.push(
+        `blocksEditor=${blocksEditor ? Object.keys(blocksEditor).slice(0, 12).join(",") : "none"}`
+      );
+      facts.push(`namespace=${Boolean(findBlockly(view))}`);
+    } catch {
+      facts.push("opts=unreadable");
+    }
     return facts.join(" ");
   }
   function isWorkspaceBusy(reach2) {
