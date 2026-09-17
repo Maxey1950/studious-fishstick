@@ -22,6 +22,13 @@ import {
   type ArcadeProject,
 } from '../../shared/arcadeProtocol';
 import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/syncState';
+import {
+  applyBlocksDirectly,
+  createBlobEditorUrl,
+  probeEditor,
+  readBlocksDirectly,
+  type EditorReach,
+} from './sameOrigin';
 
 const vscodeApi = acquireVsCodeApi();
 
@@ -39,6 +46,64 @@ function loadEditor(url: string): void {
   } else {
     frame.src = url;
   }
+}
+
+/** What we can reach inside the editor once it is up. */
+let reach: EditorReach | undefined;
+let pollTimer: number | undefined;
+let lastPolled: string | undefined;
+
+/**
+ * Starts the editor, same-origin when asked for.
+ *
+ * A failed experiment should leave a working editor rather than a blank panel,
+ * so anything going wrong here falls back to the ordinary cross-origin load.
+ */
+async function startEditor(sameOrigin: boolean): Promise<void> {
+  if (!sameOrigin) {
+    loadEditor(ARCADE_EDITOR_URL);
+    return;
+  }
+
+  showStatus('Loading the MakeCode Arcade editor (same-origin)\u2026');
+  try {
+    loadEditor(await createBlobEditorUrl());
+  } catch (error) {
+    showStatus(`Same-origin load failed (${describe(error)}); using the standard editor.`);
+    loadEditor(ARCADE_EDITOR_URL);
+  }
+}
+
+/** Works out, once, whether the editor's internals are reachable. */
+function probeOnce(): void {
+  if (reach) {
+    return;
+  }
+  reach = probeEditor(frame);
+  if (!reach.sameOrigin || !reach.workspace) {
+    // Worth saying out loud: it explains why changes still reload the editor.
+    showStatus(`Editor reach \u2014 ${reach.detail}`);
+  }
+}
+
+/**
+ * Reads the workspace on a timer rather than waiting for MakeCode to save.
+ *
+ * Its own save debounce is most of the delay before a change reaches the other
+ * participant, and being same-origin means we do not have to wait for it.
+ */
+function startDirectPolling(): void {
+  if (!reach?.sameOrigin || !reach.workspace || pollTimer !== undefined) {
+    return;
+  }
+  pollTimer = setInterval(() => {
+    const blocks = readBlocksDirectly(reach!, frame.contentWindow as unknown);
+    if (blocks && blocks !== lastPolled) {
+      lastPolled = blocks;
+      sync.onLocalChange(blocks, Date.now());
+      pump();
+    }
+  }, 300) as unknown as number;
 }
 
 /** The project we hand the editor when it asks, kept current as edits land. */
@@ -88,7 +153,19 @@ function pump(): void {
       // Keep pxt.json (the extension list), assets.json and main.ts; only the
       // blocks came from the other participant.
       project = withBlocks(project, effect.blocks);
-      frame.contentWindow?.postMessage(importProjectMessage(project), '*');
+
+      probeOnce();
+      // Same-origin lets the change go straight into the workspace, leaving the
+      // editor, toolbox and simulator standing. Otherwise importproject is the
+      // only route in, and it rebuilds all of them.
+      const appliedDirectly =
+        reach?.sameOrigin === true &&
+        applyBlocksDirectly(reach, frame.contentWindow as unknown, effect.blocks);
+      if (!appliedDirectly) {
+        frame.contentWindow?.postMessage(importProjectMessage(project), '*');
+      }
+      lastPolled = effect.blocks;
+
       showStatus(undefined);
       pump();
       return;
@@ -142,7 +219,11 @@ window.addEventListener('message', (event: MessageEvent) => {
     }
 
     case 'status':
-      showStatus(undefined);
+      probeOnce();
+      startDirectPolling();
+      if (reach?.sameOrigin && reach.workspace) {
+        showStatus(undefined);
+      }
       return;
 
     case 'ignore':
@@ -164,7 +245,7 @@ function handleHostMessage(message: HostMessage): void {
       if (!booted) {
         booted = true;
         showStatus('Loading the MakeCode Arcade editor…');
-        loadEditor(ARCADE_EDITOR_URL);
+        void startEditor(message.embedElement === 'blob');
         // The editor asks for the project itself once it is up; the pending
         // remote change is consumed by that request rather than by an import.
         sync.next(Date.now());
@@ -197,5 +278,9 @@ setTimeout(() => {
     post({ type: 'editorUnavailable' });
   }
 }, 30000);
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 post({ type: 'ready' });

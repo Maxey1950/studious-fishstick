@@ -138,6 +138,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
       editable: !this.isReadOnly(document),
       debounceMs: config.get<number>('writeDebounceMs', 250),
       remoteApplyDelayMs: config.get<number>('remoteApplyDelayMs', 900),
+      embedElement: this.embedElementFor(document),
       // Blockly resolves its sprites and cursors relative to this, and wants a
       // trailing slash.
       mediaUri: `${mediaUri.toString()}/`,
@@ -234,14 +235,34 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     // Both frame-src and object-src are opened to MakeCode, since the editor may
     // be embedded with an iframe or with <object>/<embed>; everything else stays
     // shut either way.
+    // In every mode but `blob` the editor is a cross-origin document carrying
+    // MakeCode's own policy, and this one governs only our small host page.
+    //
+    // `blob` is different: the editor's document is same-origin, so this policy
+    // applies to MakeCode's bundle as well, and that bundle needs inline
+    // scripts and eval (it compiles TypeScript in the browser). Those
+    // allowances exist only in that mode, and only because being same-origin is
+    // the sole way to apply a collaborator's change without reloading the whole
+    // editor. Choosing `blob` is opting into running MakeCode's code beside our
+    // own rather than walled off from it.
+    const makecode =
+      'https://arcade.makecode.com https://*.makecode.com https://cdn.makecode.com';
+    const sameOrigin = embedElement === 'blob';
+
     const csp = [
       `default-src 'none'`,
-      `frame-src https://arcade.makecode.com https://*.makecode.com`,
-      `object-src https://arcade.makecode.com https://*.makecode.com`,
-      `img-src ${webview.cspSource} data:`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `font-src ${webview.cspSource}`,
-      `script-src 'nonce-${nonce}'`,
+      `frame-src ${makecode}${sameOrigin ? ' blob:' : ''}`,
+      `object-src ${makecode}`,
+      `img-src ${webview.cspSource} data: blob:${sameOrigin ? ` ${makecode}` : ''}`,
+      `style-src ${webview.cspSource} 'unsafe-inline'${sameOrigin ? ` ${makecode}` : ''}`,
+      `font-src ${webview.cspSource}${sameOrigin ? ` ${makecode} data:` : ''}`,
+      `media-src ${webview.cspSource}${sameOrigin ? ` ${makecode}` : ''}`,
+      // Fetching the editor's own markup, which `blob` mode reads and re-hosts.
+      `connect-src ${makecode}`,
+      sameOrigin ? `worker-src blob: ${makecode}` : `worker-src 'none'`,
+      sameOrigin
+        ? `script-src 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval' blob: ${makecode}`
+        : `script-src 'nonce-${nonce}'`,
     ].join('; ');
 
     return `<!DOCTYPE html>
@@ -302,7 +323,7 @@ ${embedTag(embedElement)}
   }
 }
 
-type EmbedElement = 'credentialless' | 'iframe' | 'object' | 'embed';
+type EmbedElement = 'credentialless' | 'blob' | 'iframe' | 'object' | 'embed';
 
 /**
  * The element that hosts the MakeCode editor.
@@ -329,6 +350,11 @@ function embedTag(kind: EmbedElement): string {
     case 'embed':
       return `<embed id="editor" type="text/html" title="${title}">`;
     case 'iframe':
+      return `<iframe id="editor" title="${title}" allow="autoplay; fullscreen"></iframe>`;
+    case 'blob':
+      // The webview builds the source itself, so this stays a plain iframe.
+      // Deliberately not credentialless: that would partition the frame away
+      // again and defeat the point of loading it same-origin.
       return `<iframe id="editor" title="${title}" allow="autoplay; fullscreen"></iframe>`;
     case 'credentialless':
     default:

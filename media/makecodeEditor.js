@@ -148,6 +148,94 @@
     }
   };
 
+  // src/webview/makecode/sameOrigin.ts
+  async function createBlobEditorUrl() {
+    const response = await fetch(ARCADE_EDITOR_URL, { credentials: "omit" });
+    if (!response.ok) {
+      throw new Error(`MakeCode returned ${response.status}`);
+    }
+    const html = await response.text();
+    const origin = new URL(ARCADE_EDITOR_URL).origin;
+    const withBase = html.replace(
+      /<head([^>]*)>/i,
+      `<head$1><base href="${origin}/">`
+    );
+    if (!withBase.includes("<base")) {
+      throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");
+    }
+    return URL.createObjectURL(new Blob([withBase], { type: "text/html" }));
+  }
+  function probeEditor(frame2) {
+    const view = frame2.contentWindow;
+    try {
+      void view.document.title;
+    } catch {
+      return {
+        sameOrigin: false,
+        globals: [],
+        detail: "cross-origin: only importproject is available, so changes reload the editor"
+      };
+    }
+    const globals = ["Blockly", "pxt", "pxsim", "pxtblockly"].filter(
+      (name) => view[name] !== void 0
+    );
+    const workspace = findWorkspace(view);
+    return {
+      sameOrigin: true,
+      globals,
+      workspace,
+      detail: workspace ? `same-origin, workspace reachable (globals: ${globals.join(", ") || "none"})` : `same-origin but no workspace found (globals: ${globals.join(", ") || "none"})`
+    };
+  }
+  function findWorkspace(view) {
+    try {
+      if (view.Blockly?.getMainWorkspace) {
+        return view.Blockly.getMainWorkspace();
+      }
+      if (view.pxtblockly?.getMainWorkspace) {
+        return view.pxtblockly.getMainWorkspace();
+      }
+      const main = view.pxt?.editor?.mainWorkspace ?? view.pxt?.blocks?.getMainWorkspace?.();
+      return main ?? void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  function applyBlocksDirectly(reach2, view, xml) {
+    const workspace = reach2.workspace;
+    const Blockly = view.Blockly;
+    if (!workspace || !Blockly?.Xml) {
+      return false;
+    }
+    try {
+      const dom = Blockly.utils.xml.textToDom(xml);
+      const scroll = { x: workspace.scrollX, y: workspace.scrollY, scale: workspace.scale };
+      Blockly.Events.disable();
+      try {
+        Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
+      } finally {
+        Blockly.Events.enable();
+      }
+      workspace.setScale?.(scroll.scale);
+      workspace.scroll?.(scroll.x, scroll.y);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function readBlocksDirectly(reach2, view) {
+    const workspace = reach2.workspace;
+    const Blockly = view.Blockly;
+    if (!workspace || !Blockly?.Xml) {
+      return void 0;
+    }
+    try {
+      return Blockly.Xml.domToText(Blockly.Xml.workspaceToDom(workspace));
+    } catch {
+      return void 0;
+    }
+  }
+
   // src/webview/makecode/main.ts
   var vscodeApi = acquireVsCodeApi();
   var statusEl = document.getElementById("status");
@@ -158,6 +246,44 @@
     } else {
       frame.src = url;
     }
+  }
+  var reach;
+  var pollTimer;
+  var lastPolled;
+  async function startEditor(sameOrigin) {
+    if (!sameOrigin) {
+      loadEditor(ARCADE_EDITOR_URL);
+      return;
+    }
+    showStatus("Loading the MakeCode Arcade editor (same-origin)\u2026");
+    try {
+      loadEditor(await createBlobEditorUrl());
+    } catch (error) {
+      showStatus(`Same-origin load failed (${describe(error)}); using the standard editor.`);
+      loadEditor(ARCADE_EDITOR_URL);
+    }
+  }
+  function probeOnce() {
+    if (reach) {
+      return;
+    }
+    reach = probeEditor(frame);
+    if (!reach.sameOrigin || !reach.workspace) {
+      showStatus(`Editor reach \u2014 ${reach.detail}`);
+    }
+  }
+  function startDirectPolling() {
+    if (!reach?.sameOrigin || !reach.workspace || pollTimer !== void 0) {
+      return;
+    }
+    pollTimer = setInterval(() => {
+      const blocks = readBlocksDirectly(reach, frame.contentWindow);
+      if (blocks && blocks !== lastPolled) {
+        lastPolled = blocks;
+        sync.onLocalChange(blocks, Date.now());
+        pump();
+      }
+    }, 300);
   }
   var project = createProject("blocks", "");
   var syncOptions = DEFAULT_SYNC_OPTIONS;
@@ -193,7 +319,12 @@
         return;
       case "apply": {
         project = withBlocks(project, effect.blocks);
-        frame.contentWindow?.postMessage(importProjectMessage(project), "*");
+        probeOnce();
+        const appliedDirectly = reach?.sameOrigin === true && applyBlocksDirectly(reach, frame.contentWindow, effect.blocks);
+        if (!appliedDirectly) {
+          frame.contentWindow?.postMessage(importProjectMessage(project), "*");
+        }
+        lastPolled = effect.blocks;
         showStatus(void 0);
         pump();
         return;
@@ -230,7 +361,11 @@
         return;
       }
       case "status":
-        showStatus(void 0);
+        probeOnce();
+        startDirectPolling();
+        if (reach?.sameOrigin && reach.workspace) {
+          showStatus(void 0);
+        }
         return;
       case "ignore":
         return;
@@ -250,7 +385,7 @@
         if (!booted) {
           booted = true;
           showStatus("Loading the MakeCode Arcade editor\u2026");
-          loadEditor(ARCADE_EDITOR_URL);
+          void startEditor(message.embedElement === "blob");
           sync.next(Date.now());
         } else {
           pump();
@@ -277,6 +412,9 @@
       post({ type: "editorUnavailable" });
     }
   }, 3e4);
+  function describe(error) {
+    return error instanceof Error ? error.message : String(error);
+  }
   post({ type: "ready" });
 })();
 //# sourceMappingURL=makecodeEditor.js.map

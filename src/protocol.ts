@@ -13,6 +13,8 @@ export type HostMessage =
       debounceMs: number;
       /** Idle time before a remote change is applied (MakeCode engine). */
       remoteApplyDelayMs: number;
+      /** Which strategy is hosting the editor; `blob` means same-origin. */
+      embedElement: string;
     }
   /** The underlying text document changed — from undo, a text editor on the
    * same file, or a Live Share participant. */
