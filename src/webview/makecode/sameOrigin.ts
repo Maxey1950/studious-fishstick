@@ -302,24 +302,25 @@ const ELEMENT_SHIM = `<script>(function () {
 /**
  * Lets the editor start its workers.
  *
- * Its worker scripts now live on another origin, and browsers refuse to
- * construct a Worker from a cross-origin URL. Being same-origin is what makes
- * the fix possible: this runs inside the editor's own document, ahead of its
- * bundle, and wraps `Worker` so such a URL is re-hosted as a blob — the same
- * manoeuvre used on the page itself, one level down.
+ * Two problems, one fix. Browsers refuse to construct a Worker from a
+ * cross-origin URL, and the editor's worker scripts now live on another origin.
+ * And under vscode.dev's embedder policy, which a worker inherits, every script
+ * it pulls in must be fetched in a way that policy accepts — `importScripts` is
+ * a no-cors request, so it is refused, and it takes no option to say otherwise.
  *
- * `importScripts` cannot simply be pointed at the original URL. It is a no-cors
- * request, so under vscode.dev's embedder policy — which the worker inherits —
- * the script is refused, exactly as the page's own scripts were. Marking it as
- * CORS is not available either; `importScripts` takes no such option. So the
- * source is fetched, which can be CORS, and re-hosted as a blob for
- * `importScripts` to load from same-origin.
+ * So `importScripts` is replaced inside the worker with one that fetches the
+ * source itself and re-hosts it as a blob to load from same-origin. The fetch
+ * is a synchronous XMLHttpRequest, which workers allow and documents do not:
+ * that keeps `importScripts` synchronous, as everything calling it expects, and
+ * being an ordinary cross-origin request it satisfies the policy.
  *
- * That fetch is asynchronous, and the editor posts to its workers immediately —
- * the compiler worker gets its first job before any of this finishes. Messages
- * that arrive in the meantime are held and replayed once the real script is in,
- * as events rather than by calling a handler, so a worker that listens with
- * addEventListener hears them too.
+ * Replacing it rather than rewriting one call is what matters. The worker's own
+ * script pulls in more scripts — pxtworker.js, from a different origin again —
+ * and those calls are inside code we do not control. A replacement catches them
+ * however deep they go.
+ *
+ * Relative paths resolve against the original worker URL rather than the blob,
+ * which is the whole reason the source URL is passed in.
  */
 const WORKER_SHIM = `<script>(function () {
   var Native = window.Worker;
@@ -327,25 +328,29 @@ const WORKER_SHIM = `<script>(function () {
 
   function bootstrap(href) {
     return '(' + function (src) {
-      var queued = [];
-      self.onmessage = function (event) { queued.push(event); };
-      fetch(src, { mode: 'cors', credentials: 'omit' })
-        .then(function (response) { return response.text(); })
-        .then(function (text) {
-          self.onmessage = null;
-          var local = URL.createObjectURL(
-            new Blob([text], { type: 'application/javascript' })
-          );
-          importScripts(local);
-          var held = queued;
-          queued = [];
-          held.forEach(function (event) {
-            self.dispatchEvent(new MessageEvent('message', { data: event.data }));
-          });
-        })
-        .catch(function (error) {
-          setTimeout(function () { throw error; });
-        });
+      var nativeImport = self.importScripts.bind(self);
+
+      function rehost(url) {
+        var absolute = new URL(url, src).href;
+        if (new URL(absolute).origin === self.location.origin) {
+          return absolute;
+        }
+        var request = new XMLHttpRequest();
+        request.open('GET', absolute, false);
+        request.send(null);
+        if (request.status >= 400) {
+          throw new Error('could not load ' + absolute + ' (' + request.status + ')');
+        }
+        return URL.createObjectURL(
+          new Blob([request.responseText], { type: 'application/javascript' })
+        );
+      }
+
+      self.importScripts = function () {
+        return nativeImport.apply(null, [].map.call(arguments, rehost));
+      };
+
+      self.importScripts(src);
     }.toString() + ')(' + JSON.stringify(href) + ');';
   }
 

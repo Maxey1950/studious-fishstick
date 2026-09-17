@@ -459,25 +459,29 @@
 
   function bootstrap(href) {
     return '(' + function (src) {
-      var queued = [];
-      self.onmessage = function (event) { queued.push(event); };
-      fetch(src, { mode: 'cors', credentials: 'omit' })
-        .then(function (response) { return response.text(); })
-        .then(function (text) {
-          self.onmessage = null;
-          var local = URL.createObjectURL(
-            new Blob([text], { type: 'application/javascript' })
-          );
-          importScripts(local);
-          var held = queued;
-          queued = [];
-          held.forEach(function (event) {
-            self.dispatchEvent(new MessageEvent('message', { data: event.data }));
-          });
-        })
-        .catch(function (error) {
-          setTimeout(function () { throw error; });
-        });
+      var nativeImport = self.importScripts.bind(self);
+
+      function rehost(url) {
+        var absolute = new URL(url, src).href;
+        if (new URL(absolute).origin === self.location.origin) {
+          return absolute;
+        }
+        var request = new XMLHttpRequest();
+        request.open('GET', absolute, false);
+        request.send(null);
+        if (request.status >= 400) {
+          throw new Error('could not load ' + absolute + ' (' + request.status + ')');
+        }
+        return URL.createObjectURL(
+          new Blob([request.responseText], { type: 'application/javascript' })
+        );
+      }
+
+      self.importScripts = function () {
+        return nativeImport.apply(null, [].map.call(arguments, rehost));
+      };
+
+      self.importScripts(src);
     }.toString() + ')(' + JSON.stringify(href) + ');';
   }
 

@@ -2,7 +2,7 @@
   "name": "blocks-editor-web",
   "displayName": "Blocks Editor (.blocks)",
   "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "publisher": "MaxeyTheCat",
   "license": "MIT",
   "engines": {
