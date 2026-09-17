@@ -156,15 +156,30 @@
     }
     const html = await response.text();
     const origin = new URL(ARCADE_EDITOR_URL).origin;
-    const withBase = html.replace(
+    const absolute = html.replace(/"\/---/g, `"${origin}/---`);
+    const patched = absolute.replace(
       /<head([^>]*)>/i,
-      `<head$1><base href="${origin}/">`
+      `<head$1><base href="${origin}/">${WORKER_SHIM}`
     );
-    if (!withBase.includes("<base")) {
+    if (!patched.includes("<base")) {
       throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");
     }
-    return URL.createObjectURL(new Blob([withBase], { type: "text/html" }));
+    return URL.createObjectURL(new Blob([patched], { type: "text/html" }));
   }
+  var WORKER_SHIM = `<script>(function () {
+  var Native = window.Worker;
+  if (!Native) { return; }
+  window.Worker = function (url, options) {
+    var href = new URL(url, document.baseURI).href;
+    if (new URL(href).origin === location.origin) {
+      return new Native(url, options);
+    }
+    var wrapper = 'importScripts(' + JSON.stringify(href) + ');';
+    var blob = new Blob([wrapper], { type: 'application/javascript' });
+    return new Native(URL.createObjectURL(blob), options);
+  };
+  window.Worker.prototype = Native.prototype;
+}());<\/script>`;
   function probeEditor(frame2) {
     const view = frame2.contentWindow;
     try {

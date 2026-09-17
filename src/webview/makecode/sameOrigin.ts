@@ -39,16 +39,51 @@ export async function createBlobEditorUrl(): Promise<string> {
 
   const html = await response.text();
   const origin = new URL(ARCADE_EDITOR_URL).origin;
-  const withBase = html.replace(
+
+  // A <base> fixes document-relative URLs, but not root-relative ones: `/foo`
+  // always resolves against the origin and ignores <base> entirely. The
+  // editor's config is full of them — "/---worker", "/---tsworker" and friends
+  // — so on a blob origin they pointed at paths that do not exist, the fetch
+  // failed, and the editor showed its "Oops" screen. Make them absolute.
+  const absolute = html.replace(/"\/---/g, `"${origin}/---`);
+
+  const patched = absolute.replace(
     /<head([^>]*)>/i,
-    `<head$1><base href="${origin}/">`
+    `<head$1><base href="${origin}/">${WORKER_SHIM}`
   );
-  if (!withBase.includes('<base')) {
+  if (!patched.includes('<base')) {
     throw new Error('could not find a <head> to anchor the editor’s asset paths');
   }
 
-  return URL.createObjectURL(new Blob([withBase], { type: 'text/html' }));
+  return URL.createObjectURL(new Blob([patched], { type: 'text/html' }));
 }
+
+/**
+ * Lets the editor start its workers.
+ *
+ * Its worker scripts now live on another origin, and browsers refuse to
+ * construct a Worker from a cross-origin URL. Being same-origin is what makes
+ * the fix possible: this runs inside the editor's own document, ahead of its
+ * bundle, and wraps `Worker` so such a URL is fetched and re-hosted as a blob —
+ * the same manoeuvre used on the page itself, one level down.
+ *
+ * `importScripts` inside the worker still resolves against the original origin,
+ * which is why the shim gives the wrapper an explicit base.
+ */
+const WORKER_SHIM = `<script>(function () {
+  var Native = window.Worker;
+  if (!Native) { return; }
+  window.Worker = function (url, options) {
+    var href = new URL(url, document.baseURI).href;
+    if (new URL(href).origin === location.origin) {
+      return new Native(url, options);
+    }
+    var wrapper = 'importScripts(' + JSON.stringify(href) + ');';
+    var blob = new Blob([wrapper], { type: 'application/javascript' });
+    return new Native(URL.createObjectURL(blob), options);
+  };
+  window.Worker.prototype = Native.prototype;
+}());</script>`;
 
 /**
  * Reports whether the editor's internals are reachable, and how.
