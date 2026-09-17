@@ -433,24 +433,60 @@
         // Embeddable under a require-corp document, which the simulator's own
         // origin does not claim to be.
         element.credentialless = true;
-      } else if (name === 'script' || name === 'link') {
+      } else if (name === 'script' || name === 'link' || name === 'img') {
         // Fetched as CORS, which is the other way to satisfy that policy.
         element.crossOrigin = 'anonymous';
       }
     } catch (e) {}
     return element;
   };
+
+  // React builds its images with the Image constructor rather than
+  // createElement, so the editor's logos go through here instead.
+  var NativeImage = window.Image;
+  if (NativeImage) {
+    window.Image = function () {
+      var image = new NativeImage(arguments[0], arguments[1]);
+      try { image.crossOrigin = 'anonymous'; } catch (e) {}
+      return image;
+    };
+    window.Image.prototype = NativeImage.prototype;
+  }
 }());<\/script>`;
   var WORKER_SHIM = `<script>(function () {
   var Native = window.Worker;
   if (!Native) { return; }
+
+  function bootstrap(href) {
+    return '(' + function (src) {
+      var queued = [];
+      self.onmessage = function (event) { queued.push(event); };
+      fetch(src, { mode: 'cors', credentials: 'omit' })
+        .then(function (response) { return response.text(); })
+        .then(function (text) {
+          self.onmessage = null;
+          var local = URL.createObjectURL(
+            new Blob([text], { type: 'application/javascript' })
+          );
+          importScripts(local);
+          var held = queued;
+          queued = [];
+          held.forEach(function (event) {
+            self.dispatchEvent(new MessageEvent('message', { data: event.data }));
+          });
+        })
+        .catch(function (error) {
+          setTimeout(function () { throw error; });
+        });
+    }.toString() + ')(' + JSON.stringify(href) + ');';
+  }
+
   window.Worker = function (url, options) {
     var href = new URL(url, document.baseURI).href;
     if (new URL(href).origin === location.origin) {
       return new Native(url, options);
     }
-    var wrapper = 'importScripts(' + JSON.stringify(href) + ');';
-    var blob = new Blob([wrapper], { type: 'application/javascript' });
+    var blob = new Blob([bootstrap(href)], { type: 'application/javascript' });
     return new Native(URL.createObjectURL(blob), options);
   };
   window.Worker.prototype = Native.prototype;
