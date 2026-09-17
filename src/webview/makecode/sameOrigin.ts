@@ -295,12 +295,35 @@ function describeEditorState(view: any): string {
 }
 
 /**
- * Applies block XML straight into the editor's workspace.
+ * True while the user has a block in hand.
  *
- * This is the whole point of being same-origin: the editor's app, toolbox and
- * simulator stay up and only the canvas changes, where `importproject` would
- * have rebuilt everything. Scroll and zoom are restored so the view does not
- * jump under the user.
+ * Nothing may be applied mid-drag: disposing and rebuilding the block someone
+ * is dragging takes it out of their hand and strands the gesture.
+ */
+export function isWorkspaceBusy(reach: EditorReach): boolean {
+  try {
+    return Boolean(reach.workspace?.isDragging?.());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Applies block XML into the editor's workspace, touching only what changed.
+ *
+ * This is the whole point of being same-origin, and the reason it is worth the
+ * trouble: `importproject` rebuilds the editor, and even
+ * `clearWorkspaceAndLoadFromXml` throws away every block and builds them all
+ * again — the flash collaborators read as the editor reloading, with selection,
+ * undo history and the block under the cursor going with it.
+ *
+ * Top-level blocks carry stable ids, so the incoming XML can be matched against
+ * what is already on the canvas: blocks that did not change are left alone,
+ * blocks that did are replaced individually, and blocks that are gone are
+ * removed. In the usual case — someone moved one block — exactly one block is
+ * rebuilt and the rest of the canvas never flickers.
+ *
+ * Falls back to a wholesale load only when the XML cannot be matched up at all.
  */
 export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string): boolean {
   const workspace = reach.workspace;
@@ -313,19 +336,168 @@ export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string):
     const dom = Blockly.utils.xml.textToDom(xml);
     const scroll = { x: workspace.scrollX, y: workspace.scrollY, scale: workspace.scale };
 
+    // Events stay off throughout: each disposal and rebuild would otherwise be
+    // reported as the user's own edit and sent straight back out.
     Blockly.Events.disable();
+    let merged = false;
     try {
-      Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
+      merged = mergeIntoWorkspace(Blockly, workspace, dom);
+      if (!merged) {
+        Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
+      }
     } finally {
       Blockly.Events.enable();
     }
 
-    workspace.setScale?.(scroll.scale);
-    workspace.scroll?.(scroll.x, scroll.y);
+    if (!merged) {
+      // Only the wholesale path loses the viewport; a merge never moves it.
+      workspace.setScale?.(scroll.scale);
+      workspace.scroll?.(scroll.x, scroll.y);
+    }
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Reconciles the workspace with incoming XML block by block.
+ *
+ * Matching happens twice, because ids cannot be relied on: MakeCode saves real
+ * Arcade projects with no `id` on the top-level block at all, while Blockly
+ * always gives the blocks on its canvas one. Ids are used where both sides have
+ * them; everything left over is matched on content, so a block that merely
+ * lacks an id is recognized as itself rather than torn down and rebuilt.
+ *
+ * Returns false only if nothing in the XML could be read as blocks, which means
+ * a wholesale load is the only correct answer.
+ *
+ * Exported so the matching can be tested against real Arcade files, where
+ * getting it wrong means rebuilding a canvas that did not change.
+ */
+export function mergeIntoWorkspace(Blockly: any, workspace: any, dom: Element): boolean {
+  const incoming: Element[] = [];
+  let variables: Element | undefined;
+
+  for (const child of Array.from(dom.children)) {
+    const tag = child.tagName.toLowerCase();
+    if (tag === 'variables') {
+      variables = child;
+    } else if (tag === 'block' || tag === 'shadow') {
+      incoming.push(child);
+    }
+  }
+  if (!incoming.length && workspace.getTopBlocks(false).length) {
+    // An empty document against a full canvas is not a merge worth guessing at.
+    return false;
+  }
+
+  // Variables first: a block referring to one created elsewhere cannot be built
+  // until the workspace knows about it.
+  if (variables) {
+    Blockly.Xml.domToVariables(variables, workspace);
+  }
+
+  const unmatched = new Map<string, any>();
+  for (const block of workspace.getTopBlocks(false)) {
+    unmatched.set(block.id, block);
+  }
+
+  /** Incoming elements still needing a home, and the block each one replaces. */
+  const rebuild: Element[] = [];
+
+  // Pass one: ids, where the incoming XML has them.
+  const byContent: Element[] = [];
+  for (const element of incoming) {
+    const id = element.getAttribute('id');
+    const current = id ? unmatched.get(id) : undefined;
+    if (!current) {
+      byContent.push(element);
+      continue;
+    }
+    unmatched.delete(current.id);
+    if (canonicalize(Blockly.Xml.blockToDom(current)) !== canonicalize(element)) {
+      current.dispose(false);
+      rebuild.push(element);
+    }
+    // Otherwise unchanged: leaving it alone is what keeps the canvas still.
+  }
+
+  // Pass two: content, for incoming blocks with no id or an id the canvas does
+  // not know. An exact content match is the same block by another name.
+  const remaining = new Map<string, any[]>();
+  for (const block of unmatched.values()) {
+    const key = canonicalize(Blockly.Xml.blockToDom(block), true);
+    const bucket = remaining.get(key);
+    if (bucket) {
+      bucket.push(block);
+    } else {
+      remaining.set(key, [block]);
+    }
+  }
+
+  for (const element of byContent) {
+    const bucket = remaining.get(canonicalize(element, true));
+    const match = bucket?.shift();
+    if (match) {
+      unmatched.delete(match.id);
+    } else {
+      rebuild.push(element);
+    }
+  }
+
+  // Whatever the incoming XML never claimed has been deleted elsewhere.
+  for (const block of unmatched.values()) {
+    block.dispose(false);
+  }
+
+  for (const element of rebuild) {
+    Blockly.Xml.domToBlock(element, workspace);
+  }
+
+  return true;
+}
+
+/**
+ * A comparable form of a block's XML.
+ *
+ * The file's XML and Blockly's own serialization of the same block agree on
+ * meaning but not on spelling — attribute order differs, whitespace differs,
+ * coordinates carry fractions. Comparing the text directly would call every
+ * block changed and rebuild the whole canvas, which is exactly what this is
+ * here to avoid.
+ *
+ * `ignoreId` drops the id, for comparing a block against an incoming element
+ * that carries none.
+ */
+function canonicalize(element: Element, ignoreId = false): string {
+  const attributes = Array.from(element.attributes)
+    .filter((attribute) => !(ignoreId && attribute.name === 'id'))
+    .map((attribute) => {
+      const value =
+        attribute.name === 'x' || attribute.name === 'y'
+          ? String(Math.round(Number(attribute.value) || 0))
+          : attribute.value;
+      return `${attribute.name}=${value}`;
+    })
+    .sort()
+    .join(' ');
+
+  const children = Array.from(element.childNodes)
+    .map((node) => {
+      if (node.nodeType === 1) {
+        return canonicalize(node as Element, ignoreId);
+      }
+      if (node.nodeType === 3) {
+        const text = (node.textContent ?? '').trim();
+        return text ? `#${text}` : '';
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join('');
+
+  return `<${element.tagName.toLowerCase()} ${attributes}>${children}`;
 }
 
 /** Reads the editor's current blocks without waiting for it to save. */

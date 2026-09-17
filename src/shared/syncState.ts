@@ -5,10 +5,11 @@
  * and the editor so it can be tested directly.
  *
  * The constraint it exists to manage: MakeCode's embed API has no patch
- * operation. Applying a peer's change means `importproject`, which rebuilds the
- * entire editor and throws away scroll position, selection and undo history. So
- * remote changes are held until the local user pauses — you are never
- * interrupted mid-edit, you are caught up when you stop.
+ * operation. When the editor can only be reached through `importproject` — a
+ * cross-origin embed — applying a peer's change rebuilds the entire editor and
+ * throws away scroll position, selection and undo history, so remote changes
+ * wait for the local user to pause. Reached same-origin they are applied block
+ * by block, and the wait is a short one.
  */
 
 export interface SyncOptions {
@@ -20,17 +21,17 @@ export interface SyncOptions {
   /**
    * How long the local user must be idle before a remote change is applied.
    *
-   * This is not politeness: applying one rebuilds the whole editor, so landing
-   * it mid-gesture would take the block out of the user's hand. Someone who has
-   * not edited at all is never delayed — the wait starts from their last change,
-   * so a passive viewer sees updates immediately.
+   * Someone who has not edited at all is never delayed — the wait starts from
+   * their last change, so a passive viewer sees updates immediately. The webview
+   * additionally refuses to apply anything while a block is actually in the
+   * user's hand, so this only has to cover the gap between gestures.
    */
   applyAfterIdleMs: number;
 }
 
 export const DEFAULT_SYNC_OPTIONS: SyncOptions = {
-  sendDebounceMs: 250,
-  applyAfterIdleMs: 900,
+  sendDebounceMs: 100,
+  applyAfterIdleMs: 150,
 };
 
 export type SyncEffect =

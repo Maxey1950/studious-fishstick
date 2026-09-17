@@ -85,8 +85,8 @@
 
   // src/shared/syncState.ts
   var DEFAULT_SYNC_OPTIONS = {
-    sendDebounceMs: 250,
-    applyAfterIdleMs: 900
+    sendDebounceMs: 100,
+    applyAfterIdleMs: 150
   };
   var SyncState = class {
     constructor(options = DEFAULT_SYNC_OPTIONS) {
@@ -315,6 +315,13 @@
     facts.push(`routes=${routes.join("/") || "none"}`);
     return facts.join(" ");
   }
+  function isWorkspaceBusy(reach2) {
+    try {
+      return Boolean(reach2.workspace?.isDragging?.());
+    } catch {
+      return false;
+    }
+  }
   function applyBlocksDirectly(reach2, view, xml) {
     const workspace = reach2.workspace;
     const Blockly = blocklyOf(view);
@@ -325,17 +332,103 @@
       const dom = Blockly.utils.xml.textToDom(xml);
       const scroll = { x: workspace.scrollX, y: workspace.scrollY, scale: workspace.scale };
       Blockly.Events.disable();
+      let merged = false;
       try {
-        Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
+        merged = mergeIntoWorkspace(Blockly, workspace, dom);
+        if (!merged) {
+          Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
+        }
       } finally {
         Blockly.Events.enable();
       }
-      workspace.setScale?.(scroll.scale);
-      workspace.scroll?.(scroll.x, scroll.y);
+      if (!merged) {
+        workspace.setScale?.(scroll.scale);
+        workspace.scroll?.(scroll.x, scroll.y);
+      }
       return true;
     } catch {
       return false;
     }
+  }
+  function mergeIntoWorkspace(Blockly, workspace, dom) {
+    const incoming = [];
+    let variables;
+    for (const child of Array.from(dom.children)) {
+      const tag = child.tagName.toLowerCase();
+      if (tag === "variables") {
+        variables = child;
+      } else if (tag === "block" || tag === "shadow") {
+        incoming.push(child);
+      }
+    }
+    if (!incoming.length && workspace.getTopBlocks(false).length) {
+      return false;
+    }
+    if (variables) {
+      Blockly.Xml.domToVariables(variables, workspace);
+    }
+    const unmatched = /* @__PURE__ */ new Map();
+    for (const block of workspace.getTopBlocks(false)) {
+      unmatched.set(block.id, block);
+    }
+    const rebuild = [];
+    const byContent = [];
+    for (const element of incoming) {
+      const id = element.getAttribute("id");
+      const current = id ? unmatched.get(id) : void 0;
+      if (!current) {
+        byContent.push(element);
+        continue;
+      }
+      unmatched.delete(current.id);
+      if (canonicalize(Blockly.Xml.blockToDom(current)) !== canonicalize(element)) {
+        current.dispose(false);
+        rebuild.push(element);
+      }
+    }
+    const remaining = /* @__PURE__ */ new Map();
+    for (const block of unmatched.values()) {
+      const key = canonicalize(Blockly.Xml.blockToDom(block), true);
+      const bucket = remaining.get(key);
+      if (bucket) {
+        bucket.push(block);
+      } else {
+        remaining.set(key, [block]);
+      }
+    }
+    for (const element of byContent) {
+      const bucket = remaining.get(canonicalize(element, true));
+      const match = bucket?.shift();
+      if (match) {
+        unmatched.delete(match.id);
+      } else {
+        rebuild.push(element);
+      }
+    }
+    for (const block of unmatched.values()) {
+      block.dispose(false);
+    }
+    for (const element of rebuild) {
+      Blockly.Xml.domToBlock(element, workspace);
+    }
+    return true;
+  }
+  function canonicalize(element, ignoreId = false) {
+    const attributes = Array.from(element.attributes).filter((attribute) => !(ignoreId && attribute.name === "id")).map((attribute) => {
+      const value = attribute.name === "x" || attribute.name === "y" ? String(Math.round(Number(attribute.value) || 0)) : attribute.value;
+      return `${attribute.name}=${value}`;
+    }).sort().join(" ");
+    const children = Array.from(element.childNodes).map((node) => {
+      if (node.nodeType === 1) {
+        return canonicalize(node, ignoreId);
+      }
+      if (node.nodeType === 3) {
+        const text = (node.textContent ?? "").trim();
+        return text ? `#${text}` : "";
+      }
+      return "";
+    }).filter(Boolean).join("");
+    return `<${element.tagName.toLowerCase()} ${attributes}>${children}`;
   }
   function readBlocksDirectly(reach2, view) {
     const workspace = reach2.workspace;
@@ -361,6 +454,7 @@
       frame.src = url;
     }
   }
+  var POLL_MS = 120;
   var reach;
   var pollTimer;
   var lastPolled;
@@ -416,7 +510,7 @@
         sync.onLocalChange(blocks, Date.now());
         pump();
       }
-    }, 300);
+    }, POLL_MS);
   }
   var project = createProject("blocks", "");
   var syncOptions = DEFAULT_SYNC_OPTIONS;
@@ -426,6 +520,8 @@
   var documentBlocks = "";
   var settlingUntil = 0;
   var SETTLE_MS = 2500;
+  var deferredApply;
+  var deferredTimer;
   function post(message) {
     vscodeApi.postMessage(message);
   }
@@ -452,23 +548,42 @@
         post({ type: "edit", xml: effect.blocks });
         pump();
         return;
-      case "apply": {
-        project = withBlocks(project, effect.blocks);
-        probeOnce();
-        const appliedDirectly = reach?.sameOrigin === true && applyBlocksDirectly(reach, frame.contentWindow, effect.blocks);
-        if (!appliedDirectly) {
-          frame.contentWindow?.postMessage(importProjectMessage(project), "*");
-          settlingUntil = Date.now() + SETTLE_MS;
-        }
-        lastPolled = effect.blocks;
-        showStatus(void 0);
+      case "apply":
+        applyRemote(effect.blocks);
         pump();
         return;
-      }
       case "wait":
         timer = setTimeout(pump, Math.max(50, effect.untilMs - Date.now()));
         return;
     }
+  }
+  function applyRemote(blocks) {
+    if (reach?.sameOrigin && isWorkspaceBusy(reach)) {
+      deferredApply = blocks;
+      if (deferredTimer === void 0) {
+        deferredTimer = setTimeout(() => {
+          deferredTimer = void 0;
+          const pending = deferredApply;
+          deferredApply = void 0;
+          if (pending !== void 0) {
+            applyRemote(pending);
+          }
+        }, POLL_MS);
+      }
+      return;
+    }
+    deferredApply = void 0;
+    project = withBlocks(project, blocks);
+    probeOnce();
+    const appliedDirectly = reach?.sameOrigin === true && applyBlocksDirectly(reach, frame.contentWindow, blocks);
+    if (appliedDirectly) {
+      lastPolled = readBlocksDirectly(reach, frame.contentWindow) ?? blocks;
+    } else {
+      frame.contentWindow?.postMessage(importProjectMessage(project), "*");
+      settlingUntil = Date.now() + SETTLE_MS;
+      lastPolled = blocks;
+    }
+    showStatus(void 0);
   }
   window.addEventListener("message", (event) => {
     const data = event.data;

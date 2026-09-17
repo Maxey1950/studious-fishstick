@@ -25,6 +25,7 @@ import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/
 import {
   applyBlocksDirectly,
   createBlobEditorUrl,
+  isWorkspaceBusy,
   probeEditor,
   readBlocksDirectly,
   type EditorReach,
@@ -47,6 +48,14 @@ function loadEditor(url: string): void {
     frame.src = url;
   }
 }
+
+/**
+ * How often the workspace is read.
+ *
+ * Short, because reading it is a serialization of blocks already in memory —
+ * cheap next to the round trip through the file and Live Share that follows.
+ */
+const POLL_MS = 120;
 
 /** What we can reach inside the editor once it is up. */
 let reach: EditorReach | undefined;
@@ -133,7 +142,7 @@ function startDirectPolling(): void {
       sync.onLocalChange(blocks, Date.now());
       pump();
     }
-  }, 300) as unknown as number;
+  }, POLL_MS) as unknown as number;
 }
 
 /** The project we hand the editor when it asks, kept current as edits land. */
@@ -155,6 +164,9 @@ let documentBlocks = '';
  */
 let settlingUntil = 0;
 const SETTLE_MS = 2500;
+/** A peer's blocks waiting for the user to finish a drag. */
+let deferredApply: string | undefined;
+let deferredTimer: number | undefined;
 
 function post(message: WebviewMessage): void {
   vscodeApi.postMessage(message);
@@ -190,35 +202,70 @@ function pump(): void {
       pump();
       return;
 
-    case 'apply': {
-      // Keep pxt.json (the extension list), assets.json and main.ts; only the
-      // blocks came from the other participant.
-      project = withBlocks(project, effect.blocks);
-
-      probeOnce();
-      // Same-origin lets the change go straight into the workspace, leaving the
-      // editor, toolbox and simulator standing. Otherwise importproject is the
-      // only route in, and it rebuilds all of them.
-      const appliedDirectly =
-        reach?.sameOrigin === true &&
-        applyBlocksDirectly(reach, frame.contentWindow as unknown, effect.blocks);
-      if (!appliedDirectly) {
-        frame.contentWindow?.postMessage(importProjectMessage(project), '*');
-        // Only the import route needs a settling window; applying to the
-        // workspace directly does not make the editor re-save.
-        settlingUntil = Date.now() + SETTLE_MS;
-      }
-      lastPolled = effect.blocks;
-
-      showStatus(undefined);
+    case 'apply':
+      applyRemote(effect.blocks);
       pump();
       return;
-    }
 
     case 'wait':
       timer = setTimeout(pump, Math.max(50, effect.untilMs - Date.now())) as unknown as number;
       return;
   }
+}
+
+/**
+ * Puts a peer's blocks into the editor.
+ *
+ * Deferred while a block is in the user's hand: applying mid-drag would dispose
+ * the block they are holding. The wait is a few frames, not a policy — the drag
+ * ends and the change lands.
+ */
+function applyRemote(blocks: string): void {
+  if (reach?.sameOrigin && isWorkspaceBusy(reach)) {
+    deferredApply = blocks;
+    if (deferredTimer === undefined) {
+      deferredTimer = setTimeout(() => {
+        deferredTimer = undefined;
+        const pending = deferredApply;
+        deferredApply = undefined;
+        if (pending !== undefined) {
+          applyRemote(pending);
+        }
+      }, POLL_MS) as unknown as number;
+    }
+    return;
+  }
+  deferredApply = undefined;
+
+  // Keep pxt.json (the extension list), assets.json and main.ts; only the
+  // blocks came from the other participant.
+  project = withBlocks(project, blocks);
+
+  probeOnce();
+  // Same-origin lets the change go straight into the workspace, leaving the
+  // editor, toolbox and simulator standing. Otherwise importproject is the
+  // only route in, and it rebuilds all of them.
+  const appliedDirectly =
+    reach?.sameOrigin === true &&
+    applyBlocksDirectly(reach, frame.contentWindow as unknown, blocks);
+
+  if (appliedDirectly) {
+    // What the workspace now serializes to is not byte-for-byte what arrived —
+    // Blockly spells the same blocks its own way. Remembering the arriving text
+    // would make the very next poll read a difference, call it a local edit and
+    // send it straight back, which is the loop that had the editor rebuilding
+    // itself every few hundred milliseconds. Remember what the workspace
+    // actually says instead.
+    lastPolled = readBlocksDirectly(reach!, frame.contentWindow as unknown) ?? blocks;
+  } else {
+    frame.contentWindow?.postMessage(importProjectMessage(project), '*');
+    // Only the import route needs a settling window; applying to the workspace
+    // directly does not make the editor re-save.
+    settlingUntil = Date.now() + SETTLE_MS;
+    lastPolled = blocks;
+  }
+
+  showStatus(undefined);
 }
 
 window.addEventListener('message', (event: MessageEvent) => {

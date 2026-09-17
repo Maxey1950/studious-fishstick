@@ -136,8 +136,8 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
       xml: document.getText(),
       renderer: config.get<RendererName>('renderer', 'pxt'),
       editable: !this.isReadOnly(document),
-      debounceMs: config.get<number>('writeDebounceMs', 250),
-      remoteApplyDelayMs: config.get<number>('remoteApplyDelayMs', 900),
+      debounceMs: config.get<number>('writeDebounceMs', 100),
+      remoteApplyDelayMs: config.get<number>('remoteApplyDelayMs', 150),
       embedElement: this.embedElementFor(document),
       // Blockly resolves its sprites and cursors relative to this, and wants a
       // trailing slash.
