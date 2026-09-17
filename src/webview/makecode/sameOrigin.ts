@@ -148,27 +148,45 @@ function controllerShim(): string {
   // pxt.editor.initExtensionsAsync is a hook the target fills in and the editor
   // calls once during startup, handing it the running ProjectView. That object
   // owns the blocks editor, and the blocks editor owns the live Blockly
-  // workspace — so wrapping the hook gets us both without either ever being a
-  // global. Wrapping preserves the target's own function; we only watch it
-  // being called.
+  // workspace — so watching the hook being called gets us both, though neither
+  // is ever a global.
+  //
+  // Wrapping it once is not enough: the target assigns its own function onto
+  // pxt.editor during startup, which replaces any wrapper already sitting
+  // there. So the property itself is redefined — every assignment is caught and
+  // re-wrapped, and whatever the target sets is still what runs.
+  function watchHook(host, name) {
+    var native = host[name];
+    if (host['__arcade_' + name]) { return; }
+    var wrap = function (fn) {
+      if (typeof fn !== 'function' || fn.__arcadeWrapped) { return fn; }
+      var wrapped = function (opts) {
+        try { window.__arcadeOpts = opts; } catch (e) {}
+        return fn.apply(this, arguments);
+      };
+      wrapped.__arcadeWrapped = true;
+      return wrapped;
+    };
+    var current = wrap(native);
+    try {
+      Object.defineProperty(host, name, {
+        configurable: true,
+        enumerable: true,
+        get: function () { return current; },
+        set: function (value) { current = wrap(value); }
+      });
+      host['__arcade_' + name] = true;
+    } catch (e) {}
+  }
+
   var editorTimer = setInterval(function () {
     var editor = window.pxt && window.pxt.editor;
     if (!editor) {
       if (Date.now() - started > 15000) { clearInterval(editorTimer); }
       return;
     }
-    ['initExtensionsAsync', 'initFieldExtensionsAsync'].forEach(function (name) {
-      var native = editor[name];
-      if (typeof native !== 'function' || native.__arcadeWrapped) { return; }
-      var wrapped = function (opts) {
-        try {
-          window.__arcadeOpts = opts;
-        } catch (e) {}
-        return native.apply(this, arguments);
-      };
-      wrapped.__arcadeWrapped = true;
-      editor[name] = wrapped;
-    });
+    watchHook(editor, 'initExtensionsAsync');
+    watchHook(editor, 'initFieldExtensionsAsync');
     clearInterval(editorTimer);
   }, 2);
 
@@ -395,6 +413,8 @@ function findWorkspace(view: any): any {
     () => view.__arcadeOpts?.projectView?.blocksEditor?.editor,
     () => view.__arcadeOpts?.projectView?.editor?.editor,
     () => view.__arcadeOpts?.projectView?.blocksEditor?.workspace,
+    // Through React, which owns the canvas whether or not any pxt hook fired.
+    () => findWorkspaceViaReact(view),
     () => view.Blockly?.getMainWorkspace?.(),
     () => view.Blockly?.common?.getMainWorkspace?.(),
     () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
@@ -552,6 +572,65 @@ function scanForWorkspace(view: any): any {
 }
 
 /**
+ * Finds the workspace through the React tree that rendered the canvas.
+ *
+ * Independent of anything pxt chooses to expose. The editor is a React
+ * application, and React leaves a reference to its internal fiber on the DOM
+ * nodes it creates. The canvas is rendered by the component that owns the
+ * workspace, so walking up from the canvas to the component instances that
+ * contain it reaches the object holding it — no global, no hook, no cooperation
+ * from the editor at all.
+ */
+function findWorkspaceViaReact(view: any): any {
+  let node: any;
+  try {
+    node =
+      view.document.querySelector('.injectionDiv') ??
+      view.document.querySelector('.blocklyWorkspace') ??
+      view.document.querySelector('.blocklySvg');
+  } catch {
+    return undefined;
+  }
+  if (!node) {
+    return undefined;
+  }
+
+  let fiber: any;
+  try {
+    const key = Object.keys(node).find(
+      (name) => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$')
+    );
+    fiber = key ? node[key] : undefined;
+  } catch {
+    return undefined;
+  }
+
+  // Upwards through the owning components. Bounded: the tree above the canvas
+  // is shallow, and an unbounded walk on a cyclic structure does not end.
+  for (let depth = 0; fiber && depth < 40; depth++) {
+    const instance = fiber.stateNode;
+    for (const name of ['editor', 'workspace', 'mainWorkspace']) {
+      try {
+        if (isWorkspace(instance?.[name])) {
+          return instance[name];
+        }
+      } catch {
+        // Keep climbing.
+      }
+    }
+    if (isWorkspace(instance)) {
+      return instance;
+    }
+    try {
+      fiber = fiber.return;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Walks an object looking for a workspace, to a bounded depth.
  *
  * Bounded because this runs while the editor is starting and the object graph
@@ -661,6 +740,11 @@ function describeEditorState(view: any): string {
       `blocksEditor=${blocksEditor ? Object.keys(blocksEditor).slice(0, 12).join(',') : 'none'}`
     );
     facts.push(`namespace=${Boolean(findBlockly(view))}`);
+    facts.push(`react=${Boolean(findWorkspaceViaReact(view))}`);
+    facts.push(`pxt=${Object.keys(view.pxt ?? {}).slice(0, 14).join(',') || 'none'}`);
+    facts.push(
+      `pxtBlocks=${Object.keys(view.pxt?.blocks ?? {}).slice(0, 14).join(',') || 'none'}`
+    );
   } catch {
     facts.push('opts=unreadable');
   }

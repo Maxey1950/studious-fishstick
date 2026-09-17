@@ -336,27 +336,45 @@
   // pxt.editor.initExtensionsAsync is a hook the target fills in and the editor
   // calls once during startup, handing it the running ProjectView. That object
   // owns the blocks editor, and the blocks editor owns the live Blockly
-  // workspace \u2014 so wrapping the hook gets us both without either ever being a
-  // global. Wrapping preserves the target's own function; we only watch it
-  // being called.
+  // workspace \u2014 so watching the hook being called gets us both, though neither
+  // is ever a global.
+  //
+  // Wrapping it once is not enough: the target assigns its own function onto
+  // pxt.editor during startup, which replaces any wrapper already sitting
+  // there. So the property itself is redefined \u2014 every assignment is caught and
+  // re-wrapped, and whatever the target sets is still what runs.
+  function watchHook(host, name) {
+    var native = host[name];
+    if (host['__arcade_' + name]) { return; }
+    var wrap = function (fn) {
+      if (typeof fn !== 'function' || fn.__arcadeWrapped) { return fn; }
+      var wrapped = function (opts) {
+        try { window.__arcadeOpts = opts; } catch (e) {}
+        return fn.apply(this, arguments);
+      };
+      wrapped.__arcadeWrapped = true;
+      return wrapped;
+    };
+    var current = wrap(native);
+    try {
+      Object.defineProperty(host, name, {
+        configurable: true,
+        enumerable: true,
+        get: function () { return current; },
+        set: function (value) { current = wrap(value); }
+      });
+      host['__arcade_' + name] = true;
+    } catch (e) {}
+  }
+
   var editorTimer = setInterval(function () {
     var editor = window.pxt && window.pxt.editor;
     if (!editor) {
       if (Date.now() - started > 15000) { clearInterval(editorTimer); }
       return;
     }
-    ['initExtensionsAsync', 'initFieldExtensionsAsync'].forEach(function (name) {
-      var native = editor[name];
-      if (typeof native !== 'function' || native.__arcadeWrapped) { return; }
-      var wrapped = function (opts) {
-        try {
-          window.__arcadeOpts = opts;
-        } catch (e) {}
-        return native.apply(this, arguments);
-      };
-      wrapped.__arcadeWrapped = true;
-      editor[name] = wrapped;
-    });
+    watchHook(editor, 'initExtensionsAsync');
+    watchHook(editor, 'initFieldExtensionsAsync');
     clearInterval(editorTimer);
   }, 2);
 
@@ -500,6 +518,8 @@
       () => view.__arcadeOpts?.projectView?.blocksEditor?.editor,
       () => view.__arcadeOpts?.projectView?.editor?.editor,
       () => view.__arcadeOpts?.projectView?.blocksEditor?.workspace,
+      // Through React, which owns the canvas whether or not any pxt hook fired.
+      () => findWorkspaceViaReact(view),
       () => view.Blockly?.getMainWorkspace?.(),
       () => view.Blockly?.common?.getMainWorkspace?.(),
       () => view.Blockly?.common?.getAllWorkspaces?.()?.[0],
@@ -615,6 +635,46 @@
     }
     return void 0;
   }
+  function findWorkspaceViaReact(view) {
+    let node;
+    try {
+      node = view.document.querySelector(".injectionDiv") ?? view.document.querySelector(".blocklyWorkspace") ?? view.document.querySelector(".blocklySvg");
+    } catch {
+      return void 0;
+    }
+    if (!node) {
+      return void 0;
+    }
+    let fiber;
+    try {
+      const key = Object.keys(node).find(
+        (name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$")
+      );
+      fiber = key ? node[key] : void 0;
+    } catch {
+      return void 0;
+    }
+    for (let depth = 0; fiber && depth < 40; depth++) {
+      const instance = fiber.stateNode;
+      for (const name of ["editor", "workspace", "mainWorkspace"]) {
+        try {
+          if (isWorkspace(instance?.[name])) {
+            return instance[name];
+          }
+        } catch {
+        }
+      }
+      if (isWorkspace(instance)) {
+        return instance;
+      }
+      try {
+        fiber = fiber.return;
+      } catch {
+        return void 0;
+      }
+    }
+    return void 0;
+  }
   function descend(value, depth, test) {
     if (!value || depth < 0 || isFrame(value)) {
       return void 0;
@@ -698,6 +758,11 @@
         `blocksEditor=${blocksEditor ? Object.keys(blocksEditor).slice(0, 12).join(",") : "none"}`
       );
       facts.push(`namespace=${Boolean(findBlockly(view))}`);
+      facts.push(`react=${Boolean(findWorkspaceViaReact(view))}`);
+      facts.push(`pxt=${Object.keys(view.pxt ?? {}).slice(0, 14).join(",") || "none"}`);
+      facts.push(
+        `pxtBlocks=${Object.keys(view.pxt?.blocks ?? {}).slice(0, 14).join(",") || "none"}`
+      );
     } catch {
       facts.push("opts=unreadable");
     }
