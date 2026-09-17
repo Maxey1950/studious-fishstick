@@ -438,6 +438,11 @@
       return candidate;
     }
     for (const route of [
+      // pxt keeps the bundled Blockly behind an accessor rather than a property,
+      // which is why every search of the object graph came back empty: it is not
+      // stored anywhere to be found, it has to be asked for.
+      () => view.pxt?.blocks?.requireBlockly?.(),
+      () => view.pxt?.blocks?.requirePxtBlockly?.(),
       () => workspace?.options?.Blockly,
       () => workspace?.Blockly,
       () => workspace?.constructor?.Blockly
