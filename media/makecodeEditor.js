@@ -450,7 +450,14 @@
       } catch {
       }
     }
-    const found = findBlockly(view);
+    if (view.__arcadeNamespaceSearched) {
+      return candidate;
+    }
+    const found = findBlockly(view, workspace);
+    try {
+      view.__arcadeNamespaceSearched = true;
+    } catch {
+    }
     if (found) {
       try {
         view.__arcadeNamespace = found;
@@ -469,7 +476,7 @@
       return false;
     }
   }
-  function findBlockly(view) {
+  function findBlockly(view, workspace) {
     const test = (value) => isBlockly(value) ? value : void 0;
     const seen = /* @__PURE__ */ new Set();
     const guarded = (value) => {
@@ -485,7 +492,7 @@
         return found;
       }
     }
-    return void 0;
+    return descend(workspace, 2, guarded);
   }
   function probeEditor(frame2) {
     const view = frame2.contentWindow;
@@ -506,7 +513,7 @@
       sameOrigin: true,
       globals,
       workspace,
-      detail: workspace ? `same-origin, workspace reachable via ${workspaceRoute} (globals: ${globals.join(", ") || "none"})` : `same-origin, no workspace \u2014 ${describeEditorState(view)}`
+      detail: workspace ? `same-origin, workspace reachable via ${workspaceRoute}, xml=${Boolean(blocklyOf(view, workspace)?.Xml)} (globals: ${globals.join(", ") || "none"})` : `same-origin, no workspace \u2014 ${describeEditorState(view)}`
     };
   }
   function findWorkspace(view) {

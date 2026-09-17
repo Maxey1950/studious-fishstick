@@ -314,7 +314,19 @@ function blocklyOf(view: any, workspace?: any): any {
   // is a stub carrying only Msg — the real one is a bundled module — but the
   // object graph the editor handed its extension hook reaches the live editor,
   // and something in there holds the namespace that built the workspace.
-  const found = findBlockly(view);
+  //
+  // Searched at most once. This runs on every read of the workspace, several
+  // times a second, and walking the editor's object graph is not something to
+  // do on a timer — so a search that finds nothing is remembered too.
+  if (view.__arcadeNamespaceSearched) {
+    return candidate;
+  }
+  const found = findBlockly(view, workspace);
+  try {
+    view.__arcadeNamespaceSearched = true;
+  } catch {
+    // Then it searches again; correct either way, just slower.
+  }
   if (found) {
     try {
       view.__arcadeNamespace = found;
@@ -343,7 +355,7 @@ function isBlockly(value: any): boolean {
 }
 
 /** Looks for the Blockly namespace anywhere the editor's own objects reach. */
-function findBlockly(view: any): any {
+function findBlockly(view: any, workspace?: any): any {
   const test = (value: any): any => (isBlockly(value) ? value : undefined);
   const seen = new Set<any>();
   const guarded = (value: any): any => {
@@ -360,7 +372,11 @@ function findBlockly(view: any): any {
       return found;
     }
   }
-  return undefined;
+
+  // The workspace last, and shallowly. Blockly built it, so a reference back to
+  // the namespace is plausible — but a workspace holds every block and every
+  // SVG node beneath it, and that is not a graph to walk deeply.
+  return descend(workspace, 2, guarded);
 }
 
 /**
@@ -392,7 +408,8 @@ export function probeEditor(frame: HTMLIFrameElement): EditorReach {
     globals,
     workspace,
     detail: workspace
-      ? `same-origin, workspace reachable via ${workspaceRoute} ` +
+      ? `same-origin, workspace reachable via ${workspaceRoute}, ` +
+        `xml=${Boolean(blocklyOf(view, workspace)?.Xml)} ` +
         `(globals: ${globals.join(', ') || 'none'})`
       : `same-origin, no workspace — ${describeEditorState(view)}`,
   };
