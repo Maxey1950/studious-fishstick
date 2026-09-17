@@ -126,6 +126,39 @@ check('nothing to do reports nothing', () => {
   assert.equal(sync.next(1000), undefined);
 });
 
+check('an echo of an earlier send is never applied back', () => {
+  // A drag sends several positions in a row. The echo of an early one arrives
+  // after the editor has moved on, and applying it puts the block back where it
+  // was — which reads, to the person dragging, as the block refusing to move.
+  const sync = new SyncState({ sendDebounceMs: 0, applyAfterIdleMs: 0 });
+
+  sync.onLocalChange('<xml>at 10</xml>', 0);
+  assert.deepEqual(sync.next(0), { kind: 'broadcast', blocks: '<xml>at 10</xml>' });
+  sync.onLocalChange('<xml>at 20</xml>', 10);
+  assert.deepEqual(sync.next(10), { kind: 'broadcast', blocks: '<xml>at 20</xml>' });
+  sync.onLocalChange('<xml>at 30</xml>', 20);
+  assert.deepEqual(sync.next(20), { kind: 'broadcast', blocks: '<xml>at 30</xml>' });
+
+  // The document changes echo back, oldest first, as they do.
+  sync.onRemoteChange('<xml>at 10</xml>', 30);
+  sync.onRemoteChange('<xml>at 20</xml>', 30);
+  sync.onRemoteChange('<xml>at 30</xml>', 30);
+  assert.equal(sync.hasPendingRemote(), false, 'our own sends are not changes');
+  assert.equal(sync.next(30), undefined);
+});
+
+check('a real change arriving after our own sends still applies', () => {
+  const sync = new SyncState({ sendDebounceMs: 0, applyAfterIdleMs: 0 });
+  sync.onLocalChange('<xml>mine</xml>', 0);
+  sync.next(0);
+
+  sync.onRemoteChange('<xml>mine</xml>', 10);
+  assert.equal(sync.hasPendingRemote(), false);
+
+  sync.onRemoteChange('<xml>theirs</xml>', 10);
+  assert.deepEqual(sync.next(10), { kind: 'apply', blocks: '<xml>theirs</xml>' });
+});
+
 if (failures > 0) {
   console.error(`\n${failures} sync rule(s) failed.`);
   process.exit(1);

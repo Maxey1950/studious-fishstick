@@ -75,11 +75,22 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
         : this.buildBlocklyHtml(webview);
 
     /**
-     * The last XML this webview handed us. When the resulting document change
-     * echoes back through `onDidChangeTextDocument` we recognize it and skip
-     * re-rendering, which would otherwise interrupt the user mid-gesture.
+     * The XML this webview has handed us recently.
+     *
+     * When the resulting document change echoes back through
+     * `onDidChangeTextDocument` we recognize it and skip re-rendering, which
+     * would otherwise interrupt the user mid-gesture. Recently, not last: a
+     * drag produces several in a row, and the echo of an earlier one arrives
+     * after the webview has moved on — so matching only the newest let the
+     * others through as if a collaborator had sent them.
      */
-    let lastTextFromWebview: string | undefined;
+    const recentFromWebview: string[] = [];
+    const rememberFromWebview = (xml: string): void => {
+      recentFromWebview.push(xml);
+      if (recentFromWebview.length > 24) {
+        recentFromWebview.shift();
+      }
+    };
 
     const post = (message: HostMessage): void => {
       void webview.postMessage(message);
@@ -103,7 +114,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
           return;
         }
         const text = event.document.getText();
-        if (text === lastTextFromWebview) {
+        if (recentFromWebview.includes(text)) {
           return;
         }
         post({ type: 'update', xml: text });
@@ -134,7 +145,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
             post({ type: 'init', ...this.initPayload(document, webview) });
             return;
           case 'edit':
-            lastTextFromWebview = message.xml;
+            rememberFromWebview(message.xml);
             await this.writeBack(document, message.xml);
             this.scheduleSave(document);
             return;

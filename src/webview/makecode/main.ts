@@ -155,6 +155,14 @@ function startDirectPolling(): void {
     if (Date.now() < settlingUntil) {
       return;
     }
+    // Nothing is read while a block is in the user's hand. Every frame of a
+    // drag would otherwise be broadcast as a finished edit, and each one comes
+    // back as an echo a moment later — by which time the block has moved on, so
+    // the echo reads as somebody else's change and puts it back. One read when
+    // the block is dropped says the same thing and says it once.
+    if (isWorkspaceBusy(reach!)) {
+      return;
+    }
     const blocks = readBlocksDirectly(reach!, frame.contentWindow as unknown);
     if (blocks && blocks !== lastPolled) {
       lastPolled = blocks;

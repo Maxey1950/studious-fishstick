@@ -45,6 +45,15 @@ interface State {
   local?: string;
   /** What we last sent, so the same content is not sent twice. */
   sent?: string;
+  /**
+   * Everything sent recently, so our own echoes are recognized as ours.
+   *
+   * The last one is not enough. A drag sends several positions in quick
+   * succession, and the echo of an earlier one arrives after the editor has
+   * moved on — matching nothing current, it reads as a collaborator's change
+   * and gets applied, which puts the block back where it was a moment ago.
+   */
+  sentHistory: string[];
   /** A peer's content we have not applied yet. */
   pendingRemote?: string;
   /** Content we applied from a peer; the editor will echo it straight back. */
@@ -54,7 +63,10 @@ interface State {
 }
 
 export class SyncState {
-  private state: State = { lastLocalChangeMs: Number.NEGATIVE_INFINITY };
+  private state: State = { lastLocalChangeMs: Number.NEGATIVE_INFINITY, sentHistory: [] };
+
+  /** How many recent sends to recognize. A drag is a handful; this is slack. */
+  private static readonly HISTORY = 24;
 
   constructor(private readonly options: SyncOptions = DEFAULT_SYNC_OPTIONS) {}
 
@@ -78,7 +90,7 @@ export class SyncState {
 
   /** A peer sent their content. */
   onRemoteChange(blocks: string, _nowMs: number): void {
-    if (blocks === this.state.local) {
+    if (blocks === this.state.local || this.state.sentHistory.includes(blocks)) {
       return;
     }
     this.state.pendingRemote = blocks;
@@ -98,6 +110,7 @@ export class SyncState {
       if (nowMs >= dueAt) {
         const blocks = this.state.local;
         this.state.sent = blocks;
+        this.remember(blocks);
         this.state.lastLocalUnsentMs = undefined;
         return { kind: 'broadcast', blocks };
       }
@@ -113,12 +126,21 @@ export class SyncState {
         // Treat applied content as already agreed, so the editor's echo of it
         // is not mistaken for a local edit worth sending back.
         this.state.sent = blocks;
+        this.remember(blocks);
         return { kind: 'apply', blocks };
       }
       return { kind: 'wait', untilMs: dueAt };
     }
 
     return undefined;
+  }
+
+  /** Records content as ours, so its echo is never applied back over the user. */
+  private remember(blocks: string): void {
+    this.state.sentHistory.push(blocks);
+    if (this.state.sentHistory.length > SyncState.HISTORY) {
+      this.state.sentHistory.shift();
+    }
   }
 
   /** True while a peer's change is waiting for the user to pause. */

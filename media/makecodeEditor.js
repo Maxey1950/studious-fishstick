@@ -219,10 +219,14 @@
     sendDebounceMs: 100,
     applyAfterIdleMs: 150
   };
-  var SyncState = class {
+  var SyncState = class _SyncState {
     constructor(options = DEFAULT_SYNC_OPTIONS) {
       this.options = options;
-      this.state = { lastLocalChangeMs: Number.NEGATIVE_INFINITY };
+      this.state = { lastLocalChangeMs: Number.NEGATIVE_INFINITY, sentHistory: [] };
+    }
+    static {
+      /** How many recent sends to recognize. A drag is a handful; this is slack. */
+      this.HISTORY = 24;
     }
     /** The editor reported a change (a `workspacesave` push). */
     onLocalChange(blocks, nowMs) {
@@ -237,7 +241,7 @@
     }
     /** A peer sent their content. */
     onRemoteChange(blocks, _nowMs) {
-      if (blocks === this.state.local) {
+      if (blocks === this.state.local || this.state.sentHistory.includes(blocks)) {
         return;
       }
       this.state.pendingRemote = blocks;
@@ -255,6 +259,7 @@
         if (nowMs >= dueAt) {
           const blocks = this.state.local;
           this.state.sent = blocks;
+          this.remember(blocks);
           this.state.lastLocalUnsentMs = void 0;
           return { kind: "broadcast", blocks };
         }
@@ -267,11 +272,19 @@
           this.state.pendingRemote = void 0;
           this.state.appliedRemote = blocks;
           this.state.sent = blocks;
+          this.remember(blocks);
           return { kind: "apply", blocks };
         }
         return { kind: "wait", untilMs: dueAt };
       }
       return void 0;
+    }
+    /** Records content as ours, so its echo is never applied back over the user. */
+    remember(blocks) {
+      this.state.sentHistory.push(blocks);
+      if (this.state.sentHistory.length > _SyncState.HISTORY) {
+        this.state.sentHistory.shift();
+      }
     }
     /** True while a peer's change is waiting for the user to pause. */
     hasPendingRemote() {
@@ -1030,6 +1043,9 @@ ${lines.join("\n")}`);
     }
     pollTimer = setInterval(() => {
       if (Date.now() < settlingUntil) {
+        return;
+      }
+      if (isWorkspaceBusy(reach)) {
         return;
       }
       const blocks = readBlocksDirectly(reach, frame.contentWindow);
