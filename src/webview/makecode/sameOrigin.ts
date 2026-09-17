@@ -64,9 +64,17 @@ export async function createBlobEditorUrl(): Promise<string> {
   // asks the host for a project — there is nothing to edit and no workspace to
   // drive. Restoring the query from inside the document, before its own scripts
   // run, puts it back in controller mode.
-  const patched = absolute.replace(
+  // The simulator lives in a cross-origin iframe of its own, one level inside
+  // the editor. On vscode.dev the webview is a require-corp document and this
+  // blob inherits that policy, under which a cross-origin frame must assert
+  // COEP itself — MakeCode's simulator origin does not, so the frame would be
+  // refused and the simulator would simply not appear. `credentialless` is the
+  // same escape hatch used for the editor itself, applied one level down.
+  const framed = absolute.replace(/<iframe(\s)/gi, '<iframe credentialless$1');
+
+  const patched = framed.replace(
     /<head([^>]*)>/i,
-    `<head$1><base href="${origin}/">${controllerShim()}${WORKER_SHIM}`
+    `<head$1><base href="${origin}/">${controllerShim()}${FRAME_SHIM}${WORKER_SHIM}`
   );
   if (!patched.includes('<base')) {
     throw new Error('could not find a <head> to anchor the editor’s asset paths');
@@ -143,6 +151,27 @@ function controllerShim(): string {
 }
 
 /**
+ * Makes the frames the editor creates embeddable under a require-corp document.
+ *
+ * The simulator's frame is built at runtime rather than served in the page, so
+ * rewriting the fetched HTML does not reach it. `credentialless` has to be set
+ * before the frame enters the document — afterwards its load has already begun
+ * — so this marks them as they are created.
+ */
+const FRAME_SHIM = `<script>(function () {
+  var create = document.createElement.bind(document);
+  document.createElement = function (tag) {
+    var element = create.apply(null, arguments);
+    try {
+      if (String(tag).toLowerCase() === 'iframe') {
+        element.credentialless = true;
+      }
+    } catch (e) {}
+    return element;
+  };
+}());</script>`;
+
+/**
  * Lets the editor start its workers.
  *
  * Its worker scripts now live on another origin, and browsers refuse to
@@ -176,8 +205,29 @@ const WORKER_SHIM = `<script>(function () {
  * is a bundled module and the global may be a different object lacking the Xml
  * helpers needed to drive a workspace.
  */
-function blocklyOf(view: any): any {
-  return view.__arcadeBlockly ?? view.Blockly;
+function blocklyOf(view: any, workspace?: any): any {
+  const candidate = view.__arcadeBlockly ?? view.Blockly;
+  if (candidate?.Xml) {
+    return candidate;
+  }
+  // The window need not carry Blockly at all. The workspace itself was built by
+  // it, so its own options and constructor lead back to the namespace that made
+  // it — which is the one whose Xml helpers will actually drive it.
+  for (const route of [
+    () => workspace?.options?.Blockly,
+    () => workspace?.Blockly,
+    () => workspace?.constructor?.Blockly,
+  ]) {
+    try {
+      const found = route();
+      if (found?.Xml) {
+        return found;
+      }
+    } catch {
+      // Try the next.
+    }
+  }
+  return candidate;
 }
 
 /**
@@ -238,12 +288,114 @@ function findWorkspace(view: any): any {
   for (const candidate of candidates) {
     try {
       const workspace = candidate();
-      // A workspace that can be serialized is one we can actually drive.
-      if (workspace?.getAllBlocks) {
+      if (isWorkspace(workspace)) {
         return workspace;
       }
     } catch {
       // Try the next route.
+    }
+  }
+
+  // None of the known names held it. MakeCode's build need not put Blockly on
+  // the window at all — in the build this runs against it does not — so rather
+  // than guessing at another name, look for an object that behaves like a
+  // workspace.
+  return scanForWorkspace(view);
+}
+
+/** A workspace is whatever can list its blocks and be driven. */
+function isWorkspace(value: any): boolean {
+  return Boolean(
+    value &&
+      typeof value.getAllBlocks === 'function' &&
+      typeof value.getTopBlocks === 'function' &&
+      typeof value.newBlock === 'function'
+  );
+}
+
+/**
+ * Looks through the editor's globals for its workspace.
+ *
+ * Deliberately shallow — two levels, and only into objects the editor put on
+ * its own window — because this runs on a timer while the editor starts up.
+ */
+function scanForWorkspace(view: any): any {
+  const seen = new Set<any>();
+
+  const test = (value: any): any => {
+    if (!value || seen.has(value)) {
+      return undefined;
+    }
+    seen.add(value);
+    if (isWorkspace(value)) {
+      return value;
+    }
+    for (const name of ['mainWorkspace', 'workspace', 'ws']) {
+      try {
+        if (isWorkspace(value[name])) {
+          return value[name];
+        }
+      } catch {
+        // Some properties throw on access; they are not it.
+      }
+    }
+    for (const name of ['getMainWorkspace', 'getWorkspace']) {
+      try {
+        const found = typeof value[name] === 'function' ? value[name]() : undefined;
+        if (isWorkspace(found)) {
+          return found;
+        }
+      } catch {
+        // Likewise.
+      }
+    }
+    return undefined;
+  };
+
+  let names: string[];
+  try {
+    names = Object.getOwnPropertyNames(view);
+  } catch {
+    return undefined;
+  }
+
+  for (const name of names) {
+    let value: any;
+    try {
+      value = view[name];
+    } catch {
+      continue;
+    }
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
+      continue;
+    }
+
+    const direct = test(value);
+    if (direct) {
+      return direct;
+    }
+
+    // One level in, for namespaces like `pxt` that hold the editor's pieces.
+    let inner: string[];
+    try {
+      inner = Object.keys(value);
+    } catch {
+      continue;
+    }
+    for (const key of inner) {
+      let child: any;
+      try {
+        child = value[key];
+      } catch {
+        continue;
+      }
+      if (!child || (typeof child !== 'object' && typeof child !== 'function')) {
+        continue;
+      }
+      const found = test(child);
+      if (found) {
+        return found;
+      }
     }
   }
   return undefined;
@@ -277,7 +429,7 @@ function describeEditorState(view: any): string {
     // Which of Blockly's exports are actually present says which build it is.
     const keys = Object.keys(view.Blockly ?? {});
     facts.push(`blocklyKeys=${keys.length}:${keys.slice(0, 8).join(',') || 'none'}`);
-    facts.push(`xml=${Boolean(blocklyOf(view)?.Xml)}`);
+    facts.push(`Blockly=${typeof view.Blockly} xml=${Boolean(blocklyOf(view)?.Xml)}`);
     facts.push(`editorKeys=${Object.keys(view.pxt?.editor ?? {}).slice(0, 8).join(',') || 'none'}`);
   } catch {
     facts.push('keys=unreadable');
@@ -339,7 +491,7 @@ export function isWorkspaceBusy(reach: EditorReach): boolean {
  */
 export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string): ApplyResult {
   const workspace = reach.workspace;
-  const Blockly = blocklyOf(view);
+  const Blockly = blocklyOf(view, workspace);
   if (!workspace || !Blockly?.Xml) {
     return { mode: 'import', detail: workspace ? 'no Blockly.Xml' : 'no workspace' };
   }
@@ -544,7 +696,7 @@ function canonicalize(element: Element, ignoreId = false): string {
 /** Reads the editor's current blocks without waiting for it to save. */
 export function readBlocksDirectly(reach: EditorReach, view: any): string | undefined {
   const workspace = reach.workspace;
-  const Blockly = blocklyOf(view);
+  const Blockly = blocklyOf(view, workspace);
   if (!workspace || !Blockly?.Xml) {
     return undefined;
   }

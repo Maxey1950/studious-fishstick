@@ -86,6 +86,44 @@
     };
   }
 
+  // src/shared/sameBlocks.ts
+  function sameBlocks(a, b) {
+    if (a === b) {
+      return true;
+    }
+    const left = canonicalXml(a);
+    const right = canonicalXml(b);
+    return left !== void 0 && left === right;
+  }
+  function canonicalXml(xml) {
+    try {
+      const doc = new DOMParser().parseFromString(xml, "text/xml");
+      if (doc.getElementsByTagName("parsererror").length) {
+        return void 0;
+      }
+      return canonicalElement(doc.documentElement);
+    } catch {
+      return void 0;
+    }
+  }
+  function canonicalElement(element) {
+    const attributes = Array.from(element.attributes).map((attribute) => {
+      const value = attribute.name === "x" || attribute.name === "y" ? String(Math.round(Number(attribute.value) || 0)) : attribute.value;
+      return `${attribute.name}=${value}`;
+    }).sort().join(" ");
+    const children = Array.from(element.childNodes).map((node) => {
+      if (node.nodeType === 1) {
+        return canonicalElement(node);
+      }
+      if (node.nodeType === 3) {
+        const text = (node.textContent ?? "").replace(/^\s+|\s+$/g, "");
+        return text ? `#${text}` : "";
+      }
+      return "";
+    }).filter(Boolean).join("");
+    return `<${element.tagName.toLowerCase()} ${attributes}>${children}`;
+  }
+
   // src/shared/syncState.ts
   var DEFAULT_SYNC_OPTIONS = {
     sendDebounceMs: 100,
@@ -160,9 +198,10 @@
     const html = await response.text();
     const origin = new URL(ARCADE_EDITOR_URL).origin;
     const absolute = html.replace(/"\/---/g, `"${origin}/---`);
-    const patched = absolute.replace(
+    const framed = absolute.replace(/<iframe(\s)/gi, "<iframe credentialless$1");
+    const patched = framed.replace(
       /<head([^>]*)>/i,
-      `<head$1><base href="${origin}/">${controllerShim()}${WORKER_SHIM}`
+      `<head$1><base href="${origin}/">${controllerShim()}${FRAME_SHIM}${WORKER_SHIM}`
     );
     if (!patched.includes("<base")) {
       throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");
@@ -216,6 +255,18 @@
   }, 2);
 }());<\/script>`;
   }
+  var FRAME_SHIM = `<script>(function () {
+  var create = document.createElement.bind(document);
+  document.createElement = function (tag) {
+    var element = create.apply(null, arguments);
+    try {
+      if (String(tag).toLowerCase() === 'iframe') {
+        element.credentialless = true;
+      }
+    } catch (e) {}
+    return element;
+  };
+}());<\/script>`;
   var WORKER_SHIM = `<script>(function () {
   var Native = window.Worker;
   if (!Native) { return; }
@@ -230,8 +281,25 @@
   };
   window.Worker.prototype = Native.prototype;
 }());<\/script>`;
-  function blocklyOf(view) {
-    return view.__arcadeBlockly ?? view.Blockly;
+  function blocklyOf(view, workspace) {
+    const candidate = view.__arcadeBlockly ?? view.Blockly;
+    if (candidate?.Xml) {
+      return candidate;
+    }
+    for (const route of [
+      () => workspace?.options?.Blockly,
+      () => workspace?.Blockly,
+      () => workspace?.constructor?.Blockly
+    ]) {
+      try {
+        const found = route();
+        if (found?.Xml) {
+          return found;
+        }
+      } catch {
+      }
+    }
+    return candidate;
   }
   function probeEditor(frame2) {
     const view = frame2.contentWindow;
@@ -271,10 +339,88 @@
     for (const candidate of candidates) {
       try {
         const workspace = candidate();
-        if (workspace?.getAllBlocks) {
+        if (isWorkspace(workspace)) {
           return workspace;
         }
       } catch {
+      }
+    }
+    return scanForWorkspace(view);
+  }
+  function isWorkspace(value) {
+    return Boolean(
+      value && typeof value.getAllBlocks === "function" && typeof value.getTopBlocks === "function" && typeof value.newBlock === "function"
+    );
+  }
+  function scanForWorkspace(view) {
+    const seen = /* @__PURE__ */ new Set();
+    const test = (value) => {
+      if (!value || seen.has(value)) {
+        return void 0;
+      }
+      seen.add(value);
+      if (isWorkspace(value)) {
+        return value;
+      }
+      for (const name of ["mainWorkspace", "workspace", "ws"]) {
+        try {
+          if (isWorkspace(value[name])) {
+            return value[name];
+          }
+        } catch {
+        }
+      }
+      for (const name of ["getMainWorkspace", "getWorkspace"]) {
+        try {
+          const found = typeof value[name] === "function" ? value[name]() : void 0;
+          if (isWorkspace(found)) {
+            return found;
+          }
+        } catch {
+        }
+      }
+      return void 0;
+    };
+    let names;
+    try {
+      names = Object.getOwnPropertyNames(view);
+    } catch {
+      return void 0;
+    }
+    for (const name of names) {
+      let value;
+      try {
+        value = view[name];
+      } catch {
+        continue;
+      }
+      if (!value || typeof value !== "object" && typeof value !== "function") {
+        continue;
+      }
+      const direct = test(value);
+      if (direct) {
+        return direct;
+      }
+      let inner;
+      try {
+        inner = Object.keys(value);
+      } catch {
+        continue;
+      }
+      for (const key of inner) {
+        let child;
+        try {
+          child = value[key];
+        } catch {
+          continue;
+        }
+        if (!child || typeof child !== "object" && typeof child !== "function") {
+          continue;
+        }
+        const found = test(child);
+        if (found) {
+          return found;
+        }
       }
     }
     return void 0;
@@ -295,7 +441,7 @@
     try {
       const keys = Object.keys(view.Blockly ?? {});
       facts.push(`blocklyKeys=${keys.length}:${keys.slice(0, 8).join(",") || "none"}`);
-      facts.push(`xml=${Boolean(blocklyOf(view)?.Xml)}`);
+      facts.push(`Blockly=${typeof view.Blockly} xml=${Boolean(blocklyOf(view)?.Xml)}`);
       facts.push(`editorKeys=${Object.keys(view.pxt?.editor ?? {}).slice(0, 8).join(",") || "none"}`);
     } catch {
       facts.push("keys=unreadable");
@@ -327,7 +473,7 @@
   }
   function applyBlocksDirectly(reach2, view, xml) {
     const workspace = reach2.workspace;
-    const Blockly = blocklyOf(view);
+    const Blockly = blocklyOf(view, workspace);
     if (!workspace || !Blockly?.Xml) {
       return { mode: "import", detail: workspace ? "no Blockly.Xml" : "no workspace" };
     }
@@ -450,7 +596,7 @@
   }
   function readBlocksDirectly(reach2, view) {
     const workspace = reach2.workspace;
-    const Blockly = blocklyOf(view);
+    const Blockly = blocklyOf(view, workspace);
     if (!workspace || !Blockly?.Xml) {
       return void 0;
     }
@@ -601,6 +747,11 @@
       return;
     }
     deferredApply = void 0;
+    const current = reach?.sameOrigin ? readBlocksDirectly(reach, frame.contentWindow) : void 0;
+    if (sameBlocks(blocks, current ?? blocksOf(project))) {
+      lastPolled = current ?? blocks;
+      return;
+    }
     project = withBlocks(project, blocks);
     probeOnce();
     const applied = reach?.sameOrigin ? applyBlocksDirectly(reach, frame.contentWindow, blocks) : { mode: "import", detail: "cross-origin" };

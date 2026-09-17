@@ -22,6 +22,7 @@ import {
   withBlocks,
   type ArcadeProject,
 } from '../../shared/arcadeProtocol';
+import { sameBlocks } from '../../shared/sameBlocks';
 import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/syncState';
 import {
   applyBlocksDirectly,
@@ -254,6 +255,20 @@ function applyRemote(blocks: string): void {
     return;
   }
   deferredApply = undefined;
+
+  // Nothing to do if these are the blocks the editor already has. This is the
+  // whole import loop in one check: MakeCode does not reproduce XML byte for
+  // byte, so its own save comes back looking like somebody's edit, gets applied
+  // by reloading the editor, which saves again. Comparing by meaning rather
+  // than by spelling stops that at the source — and costs nothing when the
+  // change is real.
+  const current = reach?.sameOrigin
+    ? readBlocksDirectly(reach, frame.contentWindow as unknown)
+    : undefined;
+  if (sameBlocks(blocks, current ?? blocksOf(project))) {
+    lastPolled = current ?? blocks;
+    return;
+  }
 
   // Keep pxt.json (the extension list), assets.json and main.ts; only the
   // blocks came from the other participant.
