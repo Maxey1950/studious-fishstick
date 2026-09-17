@@ -56,6 +56,15 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
     };
+    // Read the project files before the webview exists.
+    //
+    // Nothing may be awaited between showing the webview and listening to it.
+    // The webview posts `ready` the moment its script runs, and a message sent
+    // before there is a listener is dropped — so an await here means no `init`
+    // ever reaches it, the editor never loads the document, and nothing it does
+    // can be saved.
+    await this.loadProjectFiles(document);
+
     const engine = this.engineFor(document);
     webview.html =
       engine === 'makecode'
@@ -75,13 +84,12 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
 
     const disposables: vscode.Disposable[] = [];
 
-    // Read what is already beside the file, so the editor opens with the
-    // project's extensions and sprites rather than discovering them later.
-    await this.loadProjectFiles(document);
-
-    disposables.push(
-      this.watchProjectFiles(document, (files) => post({ type: 'projectUpdate', files }))
+    const watcher = this.watchProjectFiles(document, (files) =>
+      post({ type: 'projectUpdate', files })
     );
+    if (watcher) {
+      disposables.push(watcher);
+    }
 
     disposables.push(
       vscode.workspace.onDidChangeTextDocument((event) => {
@@ -196,6 +204,8 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
   /** Reads the project files beside the document into the cache. */
   private async loadProjectFiles(document: vscode.TextDocument): Promise<ProjectText> {
     const files: ProjectText = {};
+    // Sharing the rest of the project is a bonus on top of sharing the blocks.
+    // Nothing here is allowed to stop the editor opening.
     await Promise.all(
       SHARED_FILES.map(async (name) => {
         try {
@@ -273,11 +283,19 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
   private watchProjectFiles(
     document: vscode.TextDocument,
     onChanged: (files: ProjectText) => void
-  ): vscode.Disposable {
-    const folder = vscode.Uri.joinPath(document.uri, '..');
-    const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(folder, `{${SHARED_FILES.join(',')}}`)
-    );
+  ): vscode.Disposable | undefined {
+    let watcher: vscode.FileSystemWatcher;
+    try {
+      const folder = vscode.Uri.joinPath(document.uri, '..');
+      watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(folder, `{${SHARED_FILES.join(',')}}`)
+      );
+    } catch {
+      // A file outside any workspace folder, or a file system that cannot be
+      // watched. The blocks still sync; the rest of the project just will not
+      // arrive on its own.
+      return undefined;
+    }
 
     const reread = async (uri: vscode.Uri): Promise<void> => {
       const name = uri.path.split('/').pop();
