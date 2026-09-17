@@ -82,7 +82,7 @@ export async function createBlobEditorUrl(requireCorp: boolean): Promise<string>
 
   const patched = framed.replace(
     /<head([^>]*)>/i,
-    `<head$1><base href="${origin}/">${controllerShim()}${requireCorp ? FRAME_SHIM : ''}${WORKER_SHIM}`
+    `<head$1><base href="${origin}/">${controllerShim()}${SAVE_SHIM}${requireCorp ? FRAME_SHIM : ''}${WORKER_SHIM}`
   );
   if (!patched.includes('<base')) {
     throw new Error('could not find a <head> to anchor the editor’s asset paths');
@@ -157,6 +157,29 @@ function controllerShim(): string {
   }, 2);
 }());</script>`;
 }
+
+/**
+ * Gives Ctrl+S back to VS Code.
+ *
+ * MakeCode binds Ctrl+S to its own save, and a keystroke inside a nested frame
+ * never reaches the document above it — so VS Code never saw it, the file kept
+ * its dirty dot, and the only way to save was to close the tab and answer the
+ * prompt. Being same-origin means the editor's own key handling can be headed
+ * off and the keystroke passed up to where it belongs.
+ *
+ * Capture phase, so this runs before the editor's own handler rather than after
+ * it has already swallowed the event.
+ */
+const SAVE_SHIM = `<script>(function () {
+  window.addEventListener('keydown', function (event) {
+    var save = (event.ctrlKey || event.metaKey) && !event.altKey &&
+      (event.key === 's' || event.key === 'S');
+    if (!save) { return; }
+    event.preventDefault();
+    event.stopPropagation();
+    try { parent.postMessage({ type: 'blocksEditorSave' }, '*'); } catch (e) {}
+  }, true);
+}());</script>`;
 
 /**
  * Makes the frames the editor creates embeddable under a require-corp document.

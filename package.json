@@ -2,7 +2,7 @@
   "name": "blocks-editor-web",
   "displayName": "Blocks Editor (.blocks)",
   "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "publisher": "MaxeyTheCat",
   "license": "MIT",
   "engines": {
@@ -128,6 +128,18 @@
           ],
           "default": "credentialless",
           "description": "Which element embeds the MakeCode editor. \"credentialless\" is the one that works under vscode.dev’s embedder policy."
+        },
+        "blocksEditor.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Save the file automatically once a block change settles. MakeCode has no unsaved-project state, so the file is kept saved to match. Turn this off to manage saving yourself."
+        },
+        "blocksEditor.autoSaveDelayMs": {
+          "type": "number",
+          "default": 800,
+          "minimum": 100,
+          "maximum": 10000,
+          "description": "How long block changes must stop before the file is saved, so a drag is one write rather than one per frame."
         },
         "blocksEditor.remoteApplyDelayMs": {
           "type": "number",

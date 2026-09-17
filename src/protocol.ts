@@ -45,6 +45,8 @@ export type WebviewMessage =
   /** The editor changed part of the project other than its blocks — an added
    * extension, an edited sprite — and it should be written beside the file. */
   | { type: 'projectFiles'; files: Record<string, string> }
+  /** The user pressed Ctrl+S inside the editor, where VS Code cannot see it. */
+  | { type: 'save' }
   /** Something went wrong in the webview and should surface to the user. */
   | { type: 'error'; message: string }
   /** Non-fatal note (e.g. unknown MakeCode block types were stubbed). */

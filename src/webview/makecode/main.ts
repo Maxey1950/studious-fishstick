@@ -336,13 +336,20 @@ function applyRemote(blocks: string): void {
 }
 
 window.addEventListener('message', (event: MessageEvent) => {
-  // Two senders share this channel: the extension host and the embedded editor.
-  // Extension messages carry our own protocol's `type`; editor messages carry
-  // MakeCode's.
-  const data = event.data as HostMessage & { type?: string };
+  // Three senders share this channel: the extension host, the embedded editor,
+  // and the save shim running inside it. Extension messages carry our own
+  // protocol's `type`, editor messages carry MakeCode's.
+  const data = event.data as { type?: string } | undefined;
 
-  if (data?.type === 'init' || data?.type === 'update') {
+  if (data?.type === 'init' || data?.type === 'update' || data?.type === 'projectUpdate') {
     handleHostMessage(data as HostMessage);
+    return;
+  }
+
+  // Ctrl+S from inside the editor, forwarded by the shim because a keystroke in
+  // a nested frame never reaches this document on its own.
+  if (data?.type === 'blocksEditorSave') {
+    post({ type: 'save' });
     return;
   }
 
@@ -467,5 +474,17 @@ setTimeout(() => {
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+// Ctrl+S with the focus in this document rather than the editor's.
+window.addEventListener(
+  'keydown',
+  (event) => {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      post({ type: 'save' });
+    }
+  },
+  true
+);
 
 post({ type: 'ready' });

@@ -31,6 +31,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
    */
   private readonly projectFiles = new Map<string, ProjectText>();
 
+  /** Pending auto-saves, one per document, so a burst of edits is one write. */
+  private readonly saveTimers = new Map<string, number>();
+
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   public static register(context: vscode.ExtensionContext): vscode.Disposable {
@@ -133,6 +136,7 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
           case 'edit':
             lastTextFromWebview = message.xml;
             await this.writeBack(document, message.xml);
+            this.scheduleSave(document);
             return;
           case 'projectFiles':
             await this.writeProjectFiles(document, message.files);
@@ -143,6 +147,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
           case 'info':
             void vscode.window.showWarningMessage(`Blocks Editor: ${message.message}`);
             return;
+          case 'save':
+            await this.save(document);
+            return;
           case 'editorUnavailable':
             await this.offerBuiltInEditor(document);
             return;
@@ -151,6 +158,15 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     );
 
     webviewPanel.onDidDispose(() => {
+      const pending = this.saveTimers.get(document.uri.toString());
+      if (pending !== undefined) {
+        clearTimeout(pending);
+        this.saveTimers.delete(document.uri.toString());
+        // The edits are already in the document; saving now means closing the
+        // tab does not put up a prompt for changes the user never thinks of as
+        // unsaved.
+        void this.save(document);
+      }
       for (const disposable of disposables) {
         disposable.dispose();
       }
@@ -196,6 +212,53 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
    * Writes the serialized workspace back to the document as the narrowest edit
    * that produces it, so concurrent Live Share edits to other blocks survive.
    */
+  /**
+   * Saves the document, if it has anything to save.
+   *
+   * Writing a block change only makes the document dirty; a dirty file is
+   * enough for Live Share, which replicates unsaved editor state, but it leaves
+   * the tab marked and MakeCode has no notion of an unsaved project for a user
+   * to reason about.
+   */
+  private async save(document: vscode.TextDocument): Promise<void> {
+    if (document.isUntitled || !document.isDirty) {
+      return;
+    }
+    try {
+      await document.save();
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `Blocks Editor: could not save the file (${describeError(error)}).`
+      );
+    }
+  }
+
+  /**
+   * Saves once the edits stop, rather than on each one.
+   *
+   * A drag produces an edit every few frames and each one would otherwise be a
+   * write to disk. Waiting for the gesture to finish makes it one.
+   */
+  private scheduleSave(document: vscode.TextDocument): void {
+    const config = vscode.workspace.getConfiguration('blocksEditor', document.uri);
+    if (!config.get<boolean>('autoSave', true)) {
+      return;
+    }
+
+    const key = document.uri.toString();
+    const pending = this.saveTimers.get(key);
+    if (pending !== undefined) {
+      clearTimeout(pending);
+    }
+    this.saveTimers.set(
+      key,
+      setTimeout(() => {
+        this.saveTimers.delete(key);
+        void this.save(document);
+      }, config.get<number>('autoSaveDelayMs', 800)) as unknown as number
+    );
+  }
+
   /** Where a project file lives: beside the `.blocks` file. */
   private siblingUri(document: vscode.TextDocument, name: string): vscode.Uri {
     return vscode.Uri.joinPath(document.uri, '..', name);

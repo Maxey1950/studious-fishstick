@@ -243,7 +243,7 @@
     const framed = requireCorp ? absolute.replace(/<iframe(\s)/gi, "<iframe credentialless$1") : absolute;
     const patched = framed.replace(
       /<head([^>]*)>/i,
-      `<head$1><base href="${origin}/">${controllerShim()}${requireCorp ? FRAME_SHIM : ""}${WORKER_SHIM}`
+      `<head$1><base href="${origin}/">${controllerShim()}${SAVE_SHIM}${requireCorp ? FRAME_SHIM : ""}${WORKER_SHIM}`
     );
     if (!patched.includes("<base")) {
       throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");
@@ -297,6 +297,16 @@
   }, 2);
 }());<\/script>`;
   }
+  var SAVE_SHIM = `<script>(function () {
+  window.addEventListener('keydown', function (event) {
+    var save = (event.ctrlKey || event.metaKey) && !event.altKey &&
+      (event.key === 's' || event.key === 'S');
+    if (!save) { return; }
+    event.preventDefault();
+    event.stopPropagation();
+    try { parent.postMessage({ type: 'blocksEditorSave' }, '*'); } catch (e) {}
+  }, true);
+}());<\/script>`;
   var FRAME_SHIM = `<script>(function () {
   var create = document.createElement.bind(document);
   document.createElement = function (tag) {
@@ -833,8 +843,12 @@
   }
   window.addEventListener("message", (event) => {
     const data = event.data;
-    if (data?.type === "init" || data?.type === "update") {
+    if (data?.type === "init" || data?.type === "update" || data?.type === "projectUpdate") {
       handleHostMessage(data);
+      return;
+    }
+    if (data?.type === "blocksEditorSave") {
+      post({ type: "save" });
       return;
     }
     const outcome = handleEditorMessage(event.data, project);
@@ -925,6 +939,16 @@
   function describe2(error) {
     return error instanceof Error ? error.message : String(error);
   }
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        post({ type: "save" });
+      }
+    },
+    true
+  );
   post({ type: "ready" });
 })();
 //# sourceMappingURL=makecodeEditor.js.map
