@@ -157,14 +157,21 @@
     const html = await response.text();
     const origin = new URL(ARCADE_EDITOR_URL).origin;
     const absolute = html.replace(/"\/---/g, `"${origin}/---`);
+    const query = new URL(ARCADE_EDITOR_URL).search;
     const patched = absolute.replace(
       /<head([^>]*)>/i,
-      `<head$1><base href="${origin}/">${WORKER_SHIM}`
+      `<head$1><base href="${origin}/">${queryShim(query)}${WORKER_SHIM}`
     );
     if (!patched.includes("<base")) {
       throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");
     }
     return URL.createObjectURL(new Blob([patched], { type: "text/html" }));
+  }
+  function queryShim(search) {
+    if (!search) {
+      return "";
+    }
+    return `<script>try{history.replaceState(null,'',${JSON.stringify(search)});}catch(e){}<\/script>`;
   }
   var WORKER_SHIM = `<script>(function () {
   var Native = window.Worker;
@@ -279,13 +286,29 @@
     }
   }
   function probeOnce() {
-    if (reach) {
+    if (reach?.workspace) {
       return;
     }
+    const previous = reach?.detail;
     reach = probeEditor(frame);
-    if (!reach.sameOrigin || !reach.workspace) {
+    if (reach.sameOrigin && reach.workspace) {
+      showStatus(void 0);
+      startDirectPolling();
+      return;
+    }
+    if (reach.detail !== previous) {
       showStatus(`Editor reach \u2014 ${reach.detail}`);
     }
+  }
+  function watchForWorkspace() {
+    let attempts = 0;
+    const timer2 = setInterval(() => {
+      attempts++;
+      probeOnce();
+      if (reach?.workspace || attempts > 40 || !reach?.sameOrigin) {
+        clearInterval(timer2);
+      }
+    }, 500);
   }
   function startDirectPolling() {
     if (!reach?.sameOrigin || !reach.workspace || pollTimer !== void 0) {
@@ -377,9 +400,8 @@
       }
       case "status":
         probeOnce();
-        startDirectPolling();
-        if (reach?.sameOrigin && reach.workspace) {
-          showStatus(void 0);
+        if (!reach?.workspace) {
+          watchForWorkspace();
         }
         return;
       case "ignore":

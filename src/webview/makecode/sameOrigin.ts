@@ -47,15 +47,37 @@ export async function createBlobEditorUrl(): Promise<string> {
   // failed, and the editor showed its "Oops" screen. Make them absolute.
   const absolute = html.replace(/"\/---/g, `"${origin}/---`);
 
+  // A blob URL carries no query string, so "?controller=1&ws=iframe" is lost
+  // when the page is re-hosted. Without it MakeCode decides it is not embedded,
+  // drops into read-only sandbox mode with an in-memory workspace, and never
+  // asks the host for a project — there is nothing to edit and no workspace to
+  // drive. Restoring the query from inside the document, before its own scripts
+  // run, puts it back in controller mode.
+  const query = new URL(ARCADE_EDITOR_URL).search;
   const patched = absolute.replace(
     /<head([^>]*)>/i,
-    `<head$1><base href="${origin}/">${WORKER_SHIM}`
+    `<head$1><base href="${origin}/">${queryShim(query)}${WORKER_SHIM}`
   );
   if (!patched.includes('<base')) {
     throw new Error('could not find a <head> to anchor the editor’s asset paths');
   }
 
   return URL.createObjectURL(new Blob([patched], { type: 'text/html' }));
+}
+
+/**
+ * Gives the re-hosted document the query string the blob URL dropped.
+ *
+ * `history.replaceState` is the only way to change a document's query without
+ * navigating, and it accepts a relative URL resolved against the current one —
+ * so the blob keeps its identity and gains the search string. It runs ahead of
+ * the editor's own scripts, which read the query as they start.
+ */
+function queryShim(search: string): string {
+  if (!search) {
+    return '';
+  }
+  return `<script>try{history.replaceState(null,'',${JSON.stringify(search)});}catch(e){}</script>`;
 }
 
 /**

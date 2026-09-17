@@ -74,16 +74,43 @@ async function startEditor(sameOrigin: boolean): Promise<void> {
   }
 }
 
-/** Works out, once, whether the editor's internals are reachable. */
+/**
+ * Works out whether the editor's internals are reachable.
+ *
+ * Deliberately re-probes while same-origin but workspace-less: the workspace
+ * does not exist until the editor has finished starting and loaded a project,
+ * which happens well after the document itself is ready. Caching the first
+ * answer would leave us falling back to reloads forever, on an editor we can
+ * actually reach.
+ */
 function probeOnce(): void {
-  if (reach) {
+  if (reach?.workspace) {
     return;
   }
+  const previous = reach?.detail;
   reach = probeEditor(frame);
-  if (!reach.sameOrigin || !reach.workspace) {
+
+  if (reach.sameOrigin && reach.workspace) {
+    showStatus(undefined);
+    startDirectPolling();
+    return;
+  }
+  if (reach.detail !== previous) {
     // Worth saying out loud: it explains why changes still reload the editor.
     showStatus(`Editor reach \u2014 ${reach.detail}`);
   }
+}
+
+/** Keeps looking for the workspace while the editor is still starting up. */
+function watchForWorkspace(): void {
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts++;
+    probeOnce();
+    if (reach?.workspace || attempts > 40 || !reach?.sameOrigin) {
+      clearInterval(timer);
+    }
+  }, 500);
 }
 
 /**
@@ -220,9 +247,10 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     case 'status':
       probeOnce();
-      startDirectPolling();
-      if (reach?.sameOrigin && reach.workspace) {
-        showStatus(undefined);
+      // The editor reports itself ready before its workspace exists, so keep
+      // watching for it rather than settling for the first answer.
+      if (!reach?.workspace) {
+        watchForWorkspace();
       }
       return;
 
