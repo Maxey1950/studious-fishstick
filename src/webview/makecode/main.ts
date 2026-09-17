@@ -124,6 +124,9 @@ function startDirectPolling(): void {
     return;
   }
   pollTimer = setInterval(() => {
+    if (Date.now() < settlingUntil) {
+      return;
+    }
     const blocks = readBlocksDirectly(reach!, frame.contentWindow as unknown);
     if (blocks && blocks !== lastPolled) {
       lastPolled = blocks;
@@ -141,6 +144,17 @@ let booted = false;
 let timer: number | undefined;
 /** The document as the extension last reported it, for the safety check below. */
 let documentBlocks = '';
+/**
+ * While set, the editor is still settling after an import and anything it
+ * reports is an echo of that import rather than a person's edit.
+ *
+ * Importing a project makes the editor re-save it, and MakeCode does not
+ * reproduce the XML byte for byte — it normalizes as it goes. That difference
+ * reads as a fresh edit, gets written to the file, comes back as a change, and
+ * is imported again: the editor reloads forever, with nobody editing anything.
+ */
+let settlingUntil = 0;
+const SETTLE_MS = 2500;
 
 function post(message: WebviewMessage): void {
   vscodeApi.postMessage(message);
@@ -190,6 +204,9 @@ function pump(): void {
         applyBlocksDirectly(reach, frame.contentWindow as unknown, effect.blocks);
       if (!appliedDirectly) {
         frame.contentWindow?.postMessage(importProjectMessage(project), '*');
+        // Only the import route needs a settling window; applying to the
+        // workspace directly does not make the editor re-save.
+        settlingUntil = Date.now() + SETTLE_MS;
       }
       lastPolled = effect.blocks;
 
@@ -227,6 +244,13 @@ window.addEventListener('message', (event: MessageEvent) => {
       // If the editor reports an empty workspace while the file has blocks in
       // it, the editor failed to load the project rather than the user deleting
       // everything. Saving that would destroy their work, so refuse.
+      // Anything arriving while the editor settles after an import is that
+      // import coming back, not a person's edit.
+      if (Date.now() < settlingUntil) {
+        lastPolled = blocks;
+        return;
+      }
+
       if (hasNoBlocks(blocks) && !hasNoBlocks(documentBlocks)) {
         showStatus(
           'The MakeCode editor opened empty, so this file has NOT been changed. ' +

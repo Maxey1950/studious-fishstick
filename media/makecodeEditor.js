@@ -407,6 +407,9 @@
       return;
     }
     pollTimer = setInterval(() => {
+      if (Date.now() < settlingUntil) {
+        return;
+      }
       const blocks = readBlocksDirectly(reach, frame.contentWindow);
       if (blocks && blocks !== lastPolled) {
         lastPolled = blocks;
@@ -421,6 +424,8 @@
   var booted = false;
   var timer;
   var documentBlocks = "";
+  var settlingUntil = 0;
+  var SETTLE_MS = 2500;
   function post(message) {
     vscodeApi.postMessage(message);
   }
@@ -453,6 +458,7 @@
         const appliedDirectly = reach?.sameOrigin === true && applyBlocksDirectly(reach, frame.contentWindow, effect.blocks);
         if (!appliedDirectly) {
           frame.contentWindow?.postMessage(importProjectMessage(project), "*");
+          settlingUntil = Date.now() + SETTLE_MS;
         }
         lastPolled = effect.blocks;
         showStatus(void 0);
@@ -477,6 +483,10 @@
         return;
       case "projectChanged": {
         const blocks = blocksOf(outcome.project);
+        if (Date.now() < settlingUntil) {
+          lastPolled = blocks;
+          return;
+        }
         if (hasNoBlocks(blocks) && !hasNoBlocks(documentBlocks)) {
           showStatus(
             'The MakeCode editor opened empty, so this file has NOT been changed. Close and reopen it; if it keeps happening, switch blocksEditor.engine to "blockly".'
