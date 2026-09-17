@@ -284,3 +284,48 @@ test('nothing is reported when nothing changed', () => {
   mergeIntoWorkspace(Blockly, workspace, parse(xml), baseIndexOf(xml), touched);
   assert.deepEqual(touched, []);
 });
+
+test('a base in the wrong spelling does not duplicate the canvas', () => {
+  // The bug this guards: the base has to be a reading of the workspace, because
+  // MakeCode and Blockly write the same blocks differently. Indexed from the
+  // file, every canvas block looks like a local addition and the incoming
+  // copies get built alongside them — which is what joining a session did.
+  const onCanvas = XML(BLOCK('shared', 'canvas-1'));
+  // The same block as the other side writes it: no id, as MakeCode saves.
+  const fromThem = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="shared" x="0" y="0"/><block type="theirs" x="0" y="80"/></xml>`;
+  // A base in the workspace's own spelling: the canvas block, ids and all.
+  const base = baseIndexOf(onCanvas);
+
+  const { Blockly, workspace, built } = harness(onCanvas);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(fromThem), base), undefined);
+
+  assert.deepEqual(
+    workspace.blocks.map((b) => b.element.getAttribute('type')).sort(),
+    ['shared', 'theirs'],
+    'one of each, not two shared'
+  );
+  assert.equal(built.length, 1, 'only their new block is built');
+});
+
+test('a block stacked exactly on another is not left there', () => {
+  // The backstop. If matching ever misses, the copy lands precisely on top of
+  // the original, where it is unusable and nearly invisible.
+  const onCanvas = XML(BLOCK('same', 'first'), BLOCK('same', 'second'));
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+
+  // Both blocks are identical in content and position, so one must go.
+  mergeIntoWorkspace(Blockly, workspace, parse(onCanvas), baseIndexOf(onCanvas));
+  assert.equal(disposed.length, 1, 'the stacked copy is removed');
+  assert.equal(workspace.blocks.length, 1);
+});
+
+test('identical blocks in different places are both kept', () => {
+  // Position is part of the comparison, so two of the same block side by side
+  // are a thing somebody built on purpose.
+  const onCanvas = XML(BLOCK('same', 'first', 0), BLOCK('same', 'second', 200));
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+  mergeIntoWorkspace(Blockly, workspace, parse(onCanvas), baseIndexOf(onCanvas));
+  assert.deepEqual(disposed, []);
+  assert.equal(workspace.blocks.length, 2);
+});

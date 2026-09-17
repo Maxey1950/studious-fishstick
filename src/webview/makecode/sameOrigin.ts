@@ -1031,10 +1031,15 @@ function describe(error: unknown): string {
  * them; everything left over is matched on content, so a block that merely
  * lacks an id is recognized as itself rather than torn down and rebuilt.
  *
- * `base` is what both sides last agreed on. It is what makes a block that the
- * incoming change does not mention readable as "added here since" rather than
- * "deleted there", which is what keeps two people working at once from deleting
- * each other's blocks.
+ * `base` is what both sides last agreed on, and it must be indexed from the
+ * workspace's own serialization rather than from the document. MakeCode and
+ * Blockly write the same blocks differently — the whole reason blocks are also
+ * matched by content below — so a base taken from the file matches nothing on
+ * the canvas, every block reads as a local addition, and the incoming copies
+ * are built alongside the originals. It is what makes a block that the incoming
+ * change does not mention readable as "added here since" rather than "deleted
+ * there", which is what keeps two people working at once from deleting each
+ * other's blocks.
  *
  * Returns undefined when it merged, or the reason it would not — the caller
  * turns that into a wholesale canvas load.
@@ -1143,6 +1148,8 @@ export function mergeIntoWorkspace(
     block.dispose(false);
   }
 
+  dropStackedDuplicates(Blockly, workspace);
+
   for (const element of rebuild) {
     const block = Blockly.Xml.domToBlock(element, workspace);
     // Worth pointing out on screen: this is what somebody else just did, and
@@ -1166,7 +1173,14 @@ export interface BaseIndex {
   contents: Set<string>;
 }
 
-/** Indexes an agreed-upon document, for telling additions from deletions. */
+/**
+ * Indexes an agreed-upon state, for telling additions from deletions.
+ *
+ * What is passed in has to be a reading of the workspace, not the document —
+ * see `mergeIntoWorkspace`. The two spell the same blocks differently, and
+ * indexing the wrong one turns every block on the canvas into an apparent
+ * addition.
+ */
 export function baseIndexOf(xml: string): BaseIndex | undefined {
   let dom: Document;
   try {
@@ -1205,6 +1219,35 @@ function existedAtBase(base: BaseIndex, Blockly: any, block: any): boolean {
     // Unreadable: treat it as pre-existing, since the cost of being wrong that
     // way is a block that lingers, and the other way is a block destroyed.
     return true;
+  }
+}
+
+/**
+ * Removes blocks that are exactly another block, in the same place.
+ *
+ * A backstop rather than a rule. Everything above tries to match each incoming
+ * block to one already on the canvas, and when that matching goes wrong the
+ * result is a second copy sitting precisely on top of the first — unusable, and
+ * hard to even see. Two blocks identical in content and position are not
+ * something a person makes on purpose: they mean the matching missed.
+ *
+ * Position is part of the comparison, so two genuinely identical blocks side by
+ * side are left alone.
+ */
+function dropStackedDuplicates(Blockly: any, workspace: any): void {
+  const seen = new Set<string>();
+  for (const block of workspace.getTopBlocks(false)) {
+    let key: string;
+    try {
+      key = canonicalize(Blockly.Xml.blockToDom(block), true);
+    } catch {
+      continue;
+    }
+    if (seen.has(key)) {
+      block.dispose(false);
+    } else {
+      seen.add(key);
+    }
   }
 }
 

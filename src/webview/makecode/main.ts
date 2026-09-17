@@ -166,6 +166,11 @@ function startDirectPolling(): void {
       return;
     }
     const blocks = readBlocksDirectly(reach!, frame.contentWindow as unknown);
+    if (blocks && !agreedBlocks) {
+      // The canvas has just been built from the document, so this reading is
+      // what both sides hold — in the spelling every later comparison uses.
+      agreedBlocks = blocks;
+    }
     if (blocks && blocks !== lastPolled) {
       lastPolled = blocks;
       sync.onLocalChange(blocks, Date.now());
@@ -204,13 +209,17 @@ let hostFiles: Record<string, string> = {};
 let settlingUntil = 0;
 const SETTLE_MS = 2500;
 /**
- * The blocks both sides last agreed on.
+ * The blocks both sides last agreed on, as the workspace itself writes them.
  *
- * Set whenever the two are known to match: when we send our state out, and when
- * we take theirs in. What is on the canvas but not in here is something added
- * locally that the other side has not seen yet — which is how an incoming
- * change that does not mention a block is read as "they had not seen it"
- * rather than "they deleted it".
+ * Always a reading of the workspace, never the document. MakeCode and Blockly
+ * spell the same blocks differently, so a value taken from the file matches
+ * nothing on the canvas: every block would look like a local addition, and an
+ * incoming change would be built alongside the originals instead of onto them.
+ * That is duplicated blocks, which is what happens on joining a session, where
+ * the two sides have never exchanged a reading yet.
+ *
+ * Empty until the first reading, and the merge falls back to treating the
+ * incoming change as authoritative until then — a window of one poll.
  */
 let agreedBlocks = '';
 
@@ -249,8 +258,13 @@ function pump(): void {
       // "Broadcast" here means writing to the document; Live Share does the
       // rest, the same way it does for the Blockly engine.
       post({ type: 'edit', xml: effect.blocks });
-      // Sent, so this is what both sides know about now.
-      agreedBlocks = effect.blocks;
+      // Sent, so this is what both sides know about now — recorded in the
+      // workspace's own spelling when there is one to read, since that is what
+      // a later merge compares against. What the editor itself reports is
+      // written MakeCode's way and would match nothing on the canvas.
+      agreedBlocks =
+        (reach?.workspace && readBlocksDirectly(reach, frame.contentWindow as unknown)) ||
+        effect.blocks;
       pump();
       return;
 
@@ -359,7 +373,9 @@ function applyRemote(blocks: string): void {
     // directly does not make the editor re-save.
     settlingUntil = Date.now() + SETTLE_MS;
     lastPolled = blocks;
-    agreedBlocks = blocks;
+    // The editor is rebuilding its workspace, so nothing is agreed until it has
+    // settled and been read again.
+    agreedBlocks = '';
   } else {
     // What the workspace now serializes to is not byte-for-byte what arrived —
     // Blockly spells the same blocks its own way. Remembering the arriving text
@@ -367,9 +383,12 @@ function applyRemote(blocks: string): void {
     // send it straight back, which is the loop that had the editor rebuilding
     // itself every few hundred milliseconds. Remember what the workspace
     // actually says instead.
-    lastPolled = readBlocksDirectly(reach!, frame.contentWindow as unknown) ?? blocks;
+    // What the workspace says now, which is both what the next poll will read
+    // and what the next merge has to compare against.
+    const readback = readBlocksDirectly(reach!, frame.contentWindow as unknown);
+    lastPolled = readback ?? blocks;
     // They have this; anything else on the canvas is ours to send on.
-    agreedBlocks = blocks;
+    agreedBlocks = readback ?? blocks;
     // Blockly's events were off while the blocks went in, so the editor does not
     // know its code changed and the simulator is still running the old program.
     // Ask it to start again, once the changes stop arriving.
@@ -464,7 +483,6 @@ function handleHostMessage(message: HostMessage): void {
       };
       highlightRemote = message.highlightRemoteChanges;
       documentBlocks = message.xml;
-      agreedBlocks = message.xml;
       hostFiles = { ...message.files };
       // Open with the project's real extensions and assets, not a bare shell —
       // otherwise the first save would report them as deleted.

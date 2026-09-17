@@ -1002,6 +1002,7 @@ ${lines.join("\n")}`);
       }
       block.dispose(false);
     }
+    dropStackedDuplicates(Blockly, workspace);
     for (const element of rebuild) {
       const block = Blockly.Xml.domToBlock(element, workspace);
       if (touched && block?.id) {
@@ -1043,6 +1044,22 @@ ${lines.join("\n")}`);
       return base.contents.has(canonicalize(Blockly.Xml.blockToDom(block), true));
     } catch {
       return true;
+    }
+  }
+  function dropStackedDuplicates(Blockly, workspace) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const block of workspace.getTopBlocks(false)) {
+      let key;
+      try {
+        key = canonicalize(Blockly.Xml.blockToDom(block), true);
+      } catch {
+        continue;
+      }
+      if (seen.has(key)) {
+        block.dispose(false);
+      } else {
+        seen.add(key);
+      }
     }
   }
   function canonicalize(element, ignoreId = false) {
@@ -1191,6 +1208,9 @@ ${lines.join("\n")}`);
         return;
       }
       const blocks = readBlocksDirectly(reach, frame.contentWindow);
+      if (blocks && !agreedBlocks) {
+        agreedBlocks = blocks;
+      }
       if (blocks && blocks !== lastPolled) {
         lastPolled = blocks;
         sync.onLocalChange(blocks, Date.now());
@@ -1235,7 +1255,7 @@ ${lines.join("\n")}`);
     switch (effect.kind) {
       case "broadcast":
         post({ type: "edit", xml: effect.blocks });
-        agreedBlocks = effect.blocks;
+        agreedBlocks = reach?.workspace && readBlocksDirectly(reach, frame.contentWindow) || effect.blocks;
         pump();
         return;
       case "apply":
@@ -1294,10 +1314,11 @@ ${lines.join("\n")}`);
       frame.contentWindow?.postMessage(importProjectMessage(project), "*");
       settlingUntil = Date.now() + SETTLE_MS;
       lastPolled = blocks;
-      agreedBlocks = blocks;
+      agreedBlocks = "";
     } else {
-      lastPolled = readBlocksDirectly(reach, frame.contentWindow) ?? blocks;
-      agreedBlocks = blocks;
+      const readback = readBlocksDirectly(reach, frame.contentWindow);
+      lastPolled = readback ?? blocks;
+      agreedBlocks = readback ?? blocks;
       scheduleSimulatorRestart();
       if (highlightRemote) {
         highlightBlocks(reach, frame.contentWindow, applied.touched);
@@ -1359,7 +1380,6 @@ ${lines.join("\n")}`);
         };
         highlightRemote = message.highlightRemoteChanges;
         documentBlocks = message.xml;
-        agreedBlocks = message.xml;
         hostFiles = { ...message.files };
         project = withFiles(createProject("blocks", message.xml), message.files);
         sync = new SyncState(syncOptions);
