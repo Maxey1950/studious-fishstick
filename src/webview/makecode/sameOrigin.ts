@@ -1296,13 +1296,40 @@ function canonicalize(element: Element, ignoreId = false): string {
 /** Reads the editor's current blocks without waiting for it to save. */
 export function readBlocksDirectly(reach: EditorReach, view: any): string | undefined {
   const workspace = reach.workspace;
+  if (!workspace) {
+    return undefined;
+  }
+
+  // pxt's own serializer first. Image and tilemap fields hold references into
+  // the project's asset store, and only pxt knows how to write those out — its
+  // saveWorkspaceXml is the exact call the editor makes to save main.blocks.
+  // Raw Blockly.Xml.workspaceToDom walks the same fields, but pxt's throw when
+  // asked to serialize the way stock Blockly expects, and the throw was being
+  // swallowed here: every poll returned nothing, so a project with an image
+  // never saved at all.
+  const pxtBlocks = view.pxt?.blocks;
+  for (const save of [pxtBlocks?.saveWorkspaceXml, pxtBlocks?.saveBlocksXml]) {
+    if (typeof save !== 'function') {
+      continue;
+    }
+    try {
+      const xml = save.call(pxtBlocks, workspace);
+      if (typeof xml === 'string' && xml) {
+        return xml;
+      }
+    } catch (error) {
+      console.warn(`[blocks] pxt saveWorkspaceXml failed: ${describe(error)}`);
+    }
+  }
+
   const Blockly = blocklyOf(view, workspace);
-  if (!workspace || !Blockly?.Xml) {
+  if (!Blockly?.Xml) {
     return undefined;
   }
   try {
     return Blockly.Xml.domToText(Blockly.Xml.workspaceToDom(workspace));
-  } catch {
+  } catch (error) {
+    console.warn(`[blocks] Blockly workspace serialize failed: ${describe(error)}`);
     return undefined;
   }
 }

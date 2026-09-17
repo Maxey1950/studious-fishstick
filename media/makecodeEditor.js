@@ -1081,13 +1081,31 @@ ${lines.join("\n")}`);
   }
   function readBlocksDirectly(reach2, view) {
     const workspace = reach2.workspace;
+    if (!workspace) {
+      return void 0;
+    }
+    const pxtBlocks = view.pxt?.blocks;
+    for (const save of [pxtBlocks?.saveWorkspaceXml, pxtBlocks?.saveBlocksXml]) {
+      if (typeof save !== "function") {
+        continue;
+      }
+      try {
+        const xml = save.call(pxtBlocks, workspace);
+        if (typeof xml === "string" && xml) {
+          return xml;
+        }
+      } catch (error) {
+        console.warn(`[blocks] pxt saveWorkspaceXml failed: ${describe(error)}`);
+      }
+    }
     const Blockly = blocklyOf(view, workspace);
-    if (!workspace || !Blockly?.Xml) {
+    if (!Blockly?.Xml) {
       return void 0;
     }
     try {
       return Blockly.Xml.domToText(Blockly.Xml.workspaceToDom(workspace));
-    } catch {
+    } catch (error) {
+      console.warn(`[blocks] Blockly workspace serialize failed: ${describe(error)}`);
       return void 0;
     }
   }
