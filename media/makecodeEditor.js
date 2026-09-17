@@ -853,7 +853,7 @@ ${lines.join("\n")}`);
       return false;
     }
   }
-  function applyBlocksDirectly(reach2, view, xml) {
+  function applyBlocksDirectly(reach2, view, xml, base) {
     const workspace = reach2.workspace;
     const Blockly = blocklyOf(view, workspace);
     if (!workspace || !Blockly?.Xml) {
@@ -868,7 +868,7 @@ ${lines.join("\n")}`);
     Blockly.Events.disable();
     let merged;
     try {
-      merged = mergeIntoWorkspace(Blockly, workspace, dom);
+      merged = mergeIntoWorkspace(Blockly, workspace, dom, base);
     } catch (error) {
       merged = `merge threw: ${describe(error)}`;
     } finally {
@@ -893,7 +893,7 @@ ${lines.join("\n")}`);
   function describe(error) {
     return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   }
-  function mergeIntoWorkspace(Blockly, workspace, dom) {
+  function mergeIntoWorkspace(Blockly, workspace, dom, base) {
     const incoming = [];
     let variables;
     for (const child of Array.from(dom.children)) {
@@ -952,12 +952,50 @@ ${lines.join("\n")}`);
       }
     }
     for (const block of unmatched.values()) {
+      if (base && !existedAtBase(base, Blockly, block)) {
+        continue;
+      }
       block.dispose(false);
     }
     for (const element of rebuild) {
       Blockly.Xml.domToBlock(element, workspace);
     }
     return void 0;
+  }
+  function baseIndexOf(xml) {
+    let dom;
+    try {
+      dom = new DOMParser().parseFromString(xml, "text/xml");
+      if (dom.getElementsByTagName("parsererror").length) {
+        return void 0;
+      }
+    } catch {
+      return void 0;
+    }
+    const ids = /* @__PURE__ */ new Set();
+    const contents = /* @__PURE__ */ new Set();
+    for (const child of Array.from(dom.documentElement?.children ?? [])) {
+      const tag = child.tagName.toLowerCase();
+      if (tag !== "block" && tag !== "shadow") {
+        continue;
+      }
+      const id = child.getAttribute("id");
+      if (id) {
+        ids.add(id);
+      }
+      contents.add(canonicalize(child, true));
+    }
+    return { ids, contents };
+  }
+  function existedAtBase(base, Blockly, block) {
+    try {
+      if (base.ids.has(block.id)) {
+        return true;
+      }
+      return base.contents.has(canonicalize(Blockly.Xml.blockToDom(block), true));
+    } catch {
+      return true;
+    }
   }
   function canonicalize(element, ignoreId = false) {
     const attributes = Array.from(element.attributes).filter((attribute) => !(ignoreId && attribute.name === "id")).map((attribute) => {
@@ -1078,6 +1116,7 @@ ${lines.join("\n")}`);
   var hostFiles = {};
   var settlingUntil = 0;
   var SETTLE_MS = 2500;
+  var agreedBlocks = "";
   var deferredApply;
   var deferredTimer;
   function post(message) {
@@ -1104,6 +1143,7 @@ ${lines.join("\n")}`);
     switch (effect.kind) {
       case "broadcast":
         post({ type: "edit", xml: effect.blocks });
+        agreedBlocks = effect.blocks;
         pump();
         return;
       case "apply":
@@ -1156,14 +1196,16 @@ ${lines.join("\n")}`);
     }
     project = withBlocks(project, blocks);
     probeOnce();
-    const applied = reach?.sameOrigin ? applyBlocksDirectly(reach, frame.contentWindow, blocks) : { mode: "import", detail: "cross-origin" };
+    const applied = reach?.sameOrigin ? applyBlocksDirectly(reach, frame.contentWindow, blocks, baseIndexOf(agreedBlocks)) : { mode: "import", detail: "cross-origin" };
     console.log(`[blocks] applied via ${applied.mode}: ${applied.detail}`);
     if (applied.mode === "import") {
       frame.contentWindow?.postMessage(importProjectMessage(project), "*");
       settlingUntil = Date.now() + SETTLE_MS;
       lastPolled = blocks;
+      agreedBlocks = blocks;
     } else {
       lastPolled = readBlocksDirectly(reach, frame.contentWindow) ?? blocks;
+      agreedBlocks = blocks;
       scheduleSimulatorRestart();
     }
     showStatus(void 0);
@@ -1221,6 +1263,7 @@ ${lines.join("\n")}`);
           applyAfterIdleMs: message.remoteApplyDelayMs
         };
         documentBlocks = message.xml;
+        agreedBlocks = message.xml;
         hostFiles = { ...message.files };
         project = withFiles(createProject("blocks", message.xml), message.files);
         sync = new SyncState(syncOptions);

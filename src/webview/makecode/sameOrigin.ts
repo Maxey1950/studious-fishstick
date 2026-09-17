@@ -906,7 +906,12 @@ export function isWorkspaceBusy(reach: EditorReach): boolean {
  * Falls back to a wholesale canvas load when the XML cannot be matched up, and
  * reports which route it took so a reload is never a mystery.
  */
-export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string): ApplyResult {
+export function applyBlocksDirectly(
+  reach: EditorReach,
+  view: any,
+  xml: string,
+  base?: BaseIndex
+): ApplyResult {
   const workspace = reach.workspace;
   const Blockly = blocklyOf(view, workspace);
   if (!workspace || !Blockly?.Xml) {
@@ -925,7 +930,7 @@ export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string):
   Blockly.Events.disable();
   let merged: string | undefined;
   try {
-    merged = mergeIntoWorkspace(Blockly, workspace, dom);
+    merged = mergeIntoWorkspace(Blockly, workspace, dom, base);
   } catch (error) {
     merged = `merge threw: ${describe(error)}`;
   } finally {
@@ -968,6 +973,11 @@ function describe(error: unknown): string {
  * them; everything left over is matched on content, so a block that merely
  * lacks an id is recognized as itself rather than torn down and rebuilt.
  *
+ * `base` is what both sides last agreed on. It is what makes a block that the
+ * incoming change does not mention readable as "added here since" rather than
+ * "deleted there", which is what keeps two people working at once from deleting
+ * each other's blocks.
+ *
  * Returns undefined when it merged, or the reason it would not — the caller
  * turns that into a wholesale canvas load.
  *
@@ -977,7 +987,8 @@ function describe(error: unknown): string {
 export function mergeIntoWorkspace(
   Blockly: any,
   workspace: any,
-  dom: Element
+  dom: Element,
+  base?: BaseIndex
 ): string | undefined {
   const incoming: Element[] = [];
   let variables: Element | undefined;
@@ -1056,8 +1067,20 @@ export function mergeIntoWorkspace(
     }
   }
 
-  // Whatever the incoming XML never claimed has been deleted elsewhere.
+  // What the incoming XML does not claim was either deleted by whoever sent it,
+  // or added here since the two sides last agreed — and telling those apart is
+  // the difference between collaborating and overwriting each other.
+  //
+  // Without the base, the only reading available is "deleted", and two people
+  // adding a block at the same moment each destroy the other's: their change
+  // was composed before they had ever seen it, so of course it does not mention
+  // it. With the base, a block that was not there when the two sides last
+  // agreed is a local addition the sender had not seen yet. It stays, and the
+  // next thing sent from here carries it to them.
   for (const block of unmatched.values()) {
+    if (base && !existedAtBase(base, Blockly, block)) {
+      continue;
+    }
     block.dispose(false);
   }
 
@@ -1066,6 +1089,59 @@ export function mergeIntoWorkspace(
   }
 
   return undefined;
+}
+
+/**
+ * What both sides last agreed the blocks were.
+ *
+ * Blocks are remembered by id and by content, because the two sides do not
+ * always agree on ids — MakeCode saves real projects without them.
+ */
+export interface BaseIndex {
+  ids: Set<string>;
+  contents: Set<string>;
+}
+
+/** Indexes an agreed-upon document, for telling additions from deletions. */
+export function baseIndexOf(xml: string): BaseIndex | undefined {
+  let dom: Document;
+  try {
+    dom = new DOMParser().parseFromString(xml, 'text/xml');
+    if (dom.getElementsByTagName('parsererror').length) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+
+  const ids = new Set<string>();
+  const contents = new Set<string>();
+  for (const child of Array.from(dom.documentElement?.children ?? [])) {
+    const tag = child.tagName.toLowerCase();
+    if (tag !== 'block' && tag !== 'shadow') {
+      continue;
+    }
+    const id = child.getAttribute('id');
+    if (id) {
+      ids.add(id);
+    }
+    contents.add(canonicalize(child, true));
+  }
+  return { ids, contents };
+}
+
+/** Whether a block on the canvas was part of the last agreed state. */
+function existedAtBase(base: BaseIndex, Blockly: any, block: any): boolean {
+  try {
+    if (base.ids.has(block.id)) {
+      return true;
+    }
+    return base.contents.has(canonicalize(Blockly.Xml.blockToDom(block), true));
+  } catch {
+    // Unreadable: treat it as pre-existing, since the cost of being wrong that
+    // way is a block that lingers, and the other way is a block destroyed.
+    return true;
+  }
 }
 
 /**

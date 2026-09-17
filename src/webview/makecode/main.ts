@@ -27,6 +27,7 @@ import { sameBlocks } from '../../shared/sameBlocks';
 import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/syncState';
 import {
   applyBlocksDirectly,
+  baseIndexOf,
   reportEditorApi,
   createBlobEditorUrl,
   isWorkspaceBusy,
@@ -199,6 +200,17 @@ let hostFiles: Record<string, string> = {};
  */
 let settlingUntil = 0;
 const SETTLE_MS = 2500;
+/**
+ * The blocks both sides last agreed on.
+ *
+ * Set whenever the two are known to match: when we send our state out, and when
+ * we take theirs in. What is on the canvas but not in here is something added
+ * locally that the other side has not seen yet — which is how an incoming
+ * change that does not mention a block is read as "they had not seen it"
+ * rather than "they deleted it".
+ */
+let agreedBlocks = '';
+
 /** A peer's blocks waiting for the user to finish a drag. */
 let deferredApply: string | undefined;
 let deferredTimer: number | undefined;
@@ -234,6 +246,8 @@ function pump(): void {
       // "Broadcast" here means writing to the document; Live Share does the
       // rest, the same way it does for the Blockly engine.
       post({ type: 'edit', xml: effect.blocks });
+      // Sent, so this is what both sides know about now.
+      agreedBlocks = effect.blocks;
       pump();
       return;
 
@@ -328,7 +342,7 @@ function applyRemote(blocks: string): void {
   // editor, toolbox and simulator standing. Otherwise importproject is the
   // only route in, and it rebuilds all of them.
   const applied = reach?.sameOrigin
-    ? applyBlocksDirectly(reach, frame.contentWindow as unknown, blocks)
+    ? applyBlocksDirectly(reach, frame.contentWindow as unknown, blocks, baseIndexOf(agreedBlocks))
     : ({ mode: 'import', detail: 'cross-origin' } as const);
 
   // Say which route the change took. A reload is the thing we are trying to
@@ -342,6 +356,7 @@ function applyRemote(blocks: string): void {
     // directly does not make the editor re-save.
     settlingUntil = Date.now() + SETTLE_MS;
     lastPolled = blocks;
+    agreedBlocks = blocks;
   } else {
     // What the workspace now serializes to is not byte-for-byte what arrived —
     // Blockly spells the same blocks its own way. Remembering the arriving text
@@ -350,6 +365,8 @@ function applyRemote(blocks: string): void {
     // itself every few hundred milliseconds. Remember what the workspace
     // actually says instead.
     lastPolled = readBlocksDirectly(reach!, frame.contentWindow as unknown) ?? blocks;
+    // They have this; anything else on the canvas is ours to send on.
+    agreedBlocks = blocks;
     // Blockly's events were off while the blocks went in, so the editor does not
     // know its code changed and the simulator is still running the old program.
     // Ask it to start again, once the changes stop arriving.
@@ -440,6 +457,7 @@ function handleHostMessage(message: HostMessage): void {
         applyAfterIdleMs: message.remoteApplyDelayMs,
       };
       documentBlocks = message.xml;
+      agreedBlocks = message.xml;
       hostFiles = { ...message.files };
       // Open with the project's real extensions and assets, not a bare shell —
       // otherwise the first save would report them as deleted.

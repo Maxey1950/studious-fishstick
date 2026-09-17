@@ -30,9 +30,10 @@ const { outputFiles } = await build({
 const dir = await mkdtemp(join(tmpdir(), 'merge-'));
 const module = join(dir, 'sameOrigin.mjs');
 await writeFile(module, outputFiles[0].text);
-const { mergeIntoWorkspace } = await import(module);
+const { mergeIntoWorkspace, baseIndexOf } = await import(module);
 
 const { window } = new JSDOM('');
+globalThis.DOMParser = window.DOMParser;
 const parse = (xml) => {
   const doc = new window.DOMParser().parseFromString(xml, 'text/xml');
   return doc.documentElement;
@@ -177,4 +178,80 @@ test('a Blockly that cannot load variables still merges the blocks', () => {
   assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(xml)), undefined);
   assert.deepEqual(disposed, []);
   assert.deepEqual(built, []);
+});
+
+// --- Two people editing at once -------------------------------------------
+//
+// The case that matters most and is hardest to see alone: a change composed
+// before the other person's block existed cannot mention it, and reading that
+// silence as a deletion is how collaborators destroy each other's work.
+
+const XML = (...blocks) =>
+  `<xml xmlns="https://developers.google.com/blockly/xml">${blocks.join('')}</xml>`;
+const BLOCK = (type, id, y = 0) => `<block type="${type}" id="${id}" x="0" y="${y}"/>`;
+
+test('a block added here survives a change that predates it', () => {
+  const base = XML(BLOCK('shared', 'shared-1'));
+  // We added ours; they added theirs, without ever having seen ours.
+  const onCanvas = XML(BLOCK('shared', 'shared-1'), BLOCK('mine', 'mine-1', 80));
+  const fromThem = XML(BLOCK('shared', 'shared-1'), BLOCK('theirs', 'theirs-1', 160));
+
+  const { Blockly, workspace, disposed, built } = harness(onCanvas);
+  assert.equal(
+    mergeIntoWorkspace(Blockly, workspace, parse(fromThem), baseIndexOf(base)),
+    undefined
+  );
+
+  assert.deepEqual(disposed, [], 'our block is not in their change, but it is not deleted');
+  assert.deepEqual(built.map((e) => e.getAttribute('id')), ['theirs-1'], 'theirs arrives');
+  assert.deepEqual(
+    workspace.blocks.map((b) => b.id).sort(),
+    ['mine-1', 'shared-1', 'theirs-1'],
+    'both new blocks are on the canvas'
+  );
+});
+
+test('a block they really deleted is still deleted', () => {
+  // Present when the two sides last agreed, absent from what they sent: gone.
+  const base = XML(BLOCK('shared', 'shared-1'), BLOCK('doomed', 'doomed-1', 80));
+  const onCanvas = base;
+  const fromThem = XML(BLOCK('shared', 'shared-1'));
+
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+  assert.equal(
+    mergeIntoWorkspace(Blockly, workspace, parse(fromThem), baseIndexOf(base)),
+    undefined
+  );
+  assert.deepEqual(disposed.map((b) => b.id), ['doomed-1']);
+});
+
+test('without a base, the incoming change is still taken as authoritative', () => {
+  // The old behaviour, kept for the paths where nothing is known to be agreed.
+  const onCanvas = XML(BLOCK('shared', 'shared-1'), BLOCK('mine', 'mine-1', 80));
+  const fromThem = XML(BLOCK('shared', 'shared-1'));
+
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(fromThem)), undefined);
+  assert.deepEqual(disposed.map((b) => b.id), ['mine-1']);
+});
+
+test('an unreadable base never deletes anything it cannot vouch for', () => {
+  assert.equal(baseIndexOf('<xml><block'), undefined);
+  assert.equal(baseIndexOf(''), undefined);
+});
+
+test('an id-less base still recognizes its blocks by content', () => {
+  // How MakeCode actually saves: no ids in the file, ids on the canvas.
+  const base = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="shared" x="0" y="0"/></xml>`;
+  const onCanvas = XML(BLOCK('shared', 'assigned-by-blockly'), BLOCK('mine', 'mine-1', 80));
+  const fromThem = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="shared" x="0" y="0"/><block type="theirs" x="0" y="160"/></xml>`;
+
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+  assert.equal(
+    mergeIntoWorkspace(Blockly, workspace, parse(fromThem), baseIndexOf(base)),
+    undefined
+  );
+  assert.deepEqual(disposed, [], 'ours is new, theirs is unchanged, nothing is lost');
 });
