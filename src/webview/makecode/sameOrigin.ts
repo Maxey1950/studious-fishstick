@@ -558,6 +558,42 @@ function findWorkspace(view: any): any {
 }
 
 /**
+ * The workspace the editor is using right now, re-resolved rather than cached.
+ *
+ * `reach.workspace` is captured once, but the editor can replace its workspace
+ * without telling us — dropping a project onto the canvas, which decodes a
+ * pxt-saved PNG and rebuilds the blocks editor, is the case that bit us: the
+ * new project loaded and then nothing saved, because we were still polling the
+ * discarded workspace. The ProjectView it handed its extension hook holds a
+ * live pointer to whatever workspace is current, so this follows that pointer
+ * each time and keeps `reach.workspace` on the real one.
+ *
+ * Only the direct routes, never the scan — this runs on every poll, and the
+ * scan walks the whole editor. If none resolve, the captured workspace stands.
+ */
+function refreshWorkspace(view: any, reach: EditorReach): any {
+  const opts = view.__arcadeOpts;
+  const routes: Array<() => any> = [
+    () => opts?.projectView?.blocksEditor?.editor,
+    () => opts?.projectView?.editor?.editor,
+    () => opts?.projectView?.blocksEditor?.workspace,
+    () => view.__arcadeWorkspace,
+  ];
+  for (const route of routes) {
+    try {
+      const workspace = route();
+      if (isWorkspace(workspace)) {
+        reach.workspace = workspace;
+        return workspace;
+      }
+    } catch {
+      // Try the next.
+    }
+  }
+  return reach.workspace;
+}
+
+/**
  * Which route reached the workspace, so a success says how rather than just
  * that it happened — the routes fail for different reasons on different builds.
  */
@@ -965,7 +1001,7 @@ export function applyBlocksDirectly(
   xml: string,
   base?: BaseIndex
 ): ApplyResult {
-  const workspace = reach.workspace;
+  const workspace = refreshWorkspace(view, reach);
   const Blockly = blocklyOf(view, workspace);
   if (!workspace || !Blockly?.Xml) {
     return {
@@ -1295,7 +1331,7 @@ function canonicalize(element: Element, ignoreId = false): string {
 
 /** Reads the editor's current blocks without waiting for it to save. */
 export function readBlocksDirectly(reach: EditorReach, view: any): string | undefined {
-  const workspace = reach.workspace;
+  const workspace = refreshWorkspace(view, reach);
   if (!workspace) {
     return undefined;
   }

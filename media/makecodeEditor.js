@@ -619,6 +619,26 @@
     workspaceRoute = "scan";
     return scanForWorkspace(view);
   }
+  function refreshWorkspace(view, reach2) {
+    const opts = view.__arcadeOpts;
+    const routes = [
+      () => opts?.projectView?.blocksEditor?.editor,
+      () => opts?.projectView?.editor?.editor,
+      () => opts?.projectView?.blocksEditor?.workspace,
+      () => view.__arcadeWorkspace
+    ];
+    for (const route of routes) {
+      try {
+        const workspace = route();
+        if (isWorkspace(workspace)) {
+          reach2.workspace = workspace;
+          return workspace;
+        }
+      } catch {
+      }
+    }
+    return reach2.workspace;
+  }
   var workspaceRoute = "none";
   function isWorkspace(value) {
     try {
@@ -894,7 +914,7 @@ ${lines.join("\n")}`);
     }
   }
   function applyBlocksDirectly(reach2, view, xml, base) {
-    const workspace = reach2.workspace;
+    const workspace = refreshWorkspace(view, reach2);
     const Blockly = blocklyOf(view, workspace);
     if (!workspace || !Blockly?.Xml) {
       return {
@@ -1080,7 +1100,7 @@ ${lines.join("\n")}`);
     return `<${element.tagName.toLowerCase()} ${attributes}>${children}`;
   }
   function readBlocksDirectly(reach2, view) {
-    const workspace = reach2.workspace;
+    const workspace = refreshWorkspace(view, reach2);
     if (!workspace) {
       return void 0;
     }
