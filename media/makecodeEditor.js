@@ -181,7 +181,13 @@
         var nativeInject = B.inject;
         B.inject = function () {
           var workspace = nativeInject.apply(this, arguments);
-          try { window.__arcadeWorkspace = workspace; } catch (e) {}
+          try {
+            window.__arcadeWorkspace = workspace;
+            // Keep the namespace that was actually called, not the one guessed
+            // at from outside: its Xml helpers are needed to drive the
+            // workspace, and the global may be a different object.
+            window.__arcadeBlockly = this || B;
+          } catch (e) {}
           return workspace;
         };
         B.__arcadeWrapped = true;
@@ -221,6 +227,9 @@
   };
   window.Worker.prototype = Native.prototype;
 }());<\/script>`;
+  function blocklyOf(view) {
+    return view.__arcadeBlockly ?? view.Blockly;
+  }
   function probeEditor(frame2) {
     const view = frame2.contentWindow;
     try {
@@ -283,6 +292,7 @@
     try {
       const keys = Object.keys(view.Blockly ?? {});
       facts.push(`blocklyKeys=${keys.length}:${keys.slice(0, 8).join(",") || "none"}`);
+      facts.push(`xml=${Boolean(blocklyOf(view)?.Xml)}`);
       facts.push(`editorKeys=${Object.keys(view.pxt?.editor ?? {}).slice(0, 8).join(",") || "none"}`);
     } catch {
       facts.push("keys=unreadable");
@@ -307,7 +317,7 @@
   }
   function applyBlocksDirectly(reach2, view, xml) {
     const workspace = reach2.workspace;
-    const Blockly = view.Blockly;
+    const Blockly = blocklyOf(view);
     if (!workspace || !Blockly?.Xml) {
       return false;
     }
@@ -329,7 +339,7 @@
   }
   function readBlocksDirectly(reach2, view) {
     const workspace = reach2.workspace;
-    const Blockly = view.Blockly;
+    const Blockly = blocklyOf(view);
     if (!workspace || !Blockly?.Xml) {
       return void 0;
     }

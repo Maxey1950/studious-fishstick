@@ -98,7 +98,13 @@ function controllerShim(): string {
         var nativeInject = B.inject;
         B.inject = function () {
           var workspace = nativeInject.apply(this, arguments);
-          try { window.__arcadeWorkspace = workspace; } catch (e) {}
+          try {
+            window.__arcadeWorkspace = workspace;
+            // Keep the namespace that was actually called, not the one guessed
+            // at from outside: its Xml helpers are needed to drive the
+            // workspace, and the global may be a different object.
+            window.__arcadeBlockly = this || B;
+          } catch (e) {}
           return workspace;
         };
         B.__arcadeWrapped = true;
@@ -151,6 +157,17 @@ const WORKER_SHIM = `<script>(function () {
   };
   window.Worker.prototype = Native.prototype;
 }());</script>`;
+
+/**
+ * The Blockly namespace that actually built the editor.
+ *
+ * Prefers the one captured when `inject` was called, since MakeCode's Blockly
+ * is a bundled module and the global may be a different object lacking the Xml
+ * helpers needed to drive a workspace.
+ */
+function blocklyOf(view: any): any {
+  return view.__arcadeBlockly ?? view.Blockly;
+}
 
 /**
  * Reports whether the editor's internals are reachable, and how.
@@ -249,6 +266,7 @@ function describeEditorState(view: any): string {
     // Which of Blockly's exports are actually present says which build it is.
     const keys = Object.keys(view.Blockly ?? {});
     facts.push(`blocklyKeys=${keys.length}:${keys.slice(0, 8).join(',') || 'none'}`);
+    facts.push(`xml=${Boolean(blocklyOf(view)?.Xml)}`);
     facts.push(`editorKeys=${Object.keys(view.pxt?.editor ?? {}).slice(0, 8).join(',') || 'none'}`);
   } catch {
     facts.push('keys=unreadable');
@@ -286,7 +304,7 @@ function describeEditorState(view: any): string {
  */
 export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string): boolean {
   const workspace = reach.workspace;
-  const Blockly = view.Blockly;
+  const Blockly = blocklyOf(view);
   if (!workspace || !Blockly?.Xml) {
     return false;
   }
@@ -313,7 +331,7 @@ export function applyBlocksDirectly(reach: EditorReach, view: any, xml: string):
 /** Reads the editor's current blocks without waiting for it to save. */
 export function readBlocksDirectly(reach: EditorReach, view: any): string | undefined {
   const workspace = reach.workspace;
-  const Blockly = view.Blockly;
+  const Blockly = blocklyOf(view);
   if (!workspace || !Blockly?.Xml) {
     return undefined;
   }
