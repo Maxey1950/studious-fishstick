@@ -1193,6 +1193,7 @@ ${lines.join("\n")}`);
   var lastPolled;
   var reportedApi = false;
   var pollReadOk = true;
+  var loggedFirstRead = false;
   async function startEditor(sameOrigin, requireCorp) {
     if (!sameOrigin) {
       loadEditor(ARCADE_EDITOR_URL);
@@ -1261,11 +1262,17 @@ ${lines.join("\n")}`);
         console.log("[blocks] poll reading the workspace again");
         pollReadOk = true;
       }
+      if (!loggedFirstRead) {
+        loggedFirstRead = true;
+        console.log(`[blocks] first workspace read (${blocks.length} chars): ${blocks.slice(0, 200)}`);
+      }
       if (!agreedBlocks) {
         agreedBlocks = blocks;
       }
       if (blocks !== lastPolled) {
-        console.log(`[blocks] local change detected (${blocks.length} chars)`);
+        console.log(
+          `[blocks] local change detected (${blocks.length} chars): ${blocks.slice(0, 120)}`
+        );
         lastPolled = blocks;
         sync.onLocalChange(blocks, Date.now());
         pump();

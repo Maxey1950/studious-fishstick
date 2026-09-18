@@ -71,6 +71,8 @@ let lastPolled: string | undefined;
 let reportedApi = false;
 /** Whether the last poll read produced XML, so a change to "nothing" is logged once. */
 let pollReadOk = true;
+/** The first successful read is snapshotted, to see what the workspace holds. */
+let loggedFirstRead = false;
 
 /**
  * Starts the editor, same-origin when asked for.
@@ -182,13 +184,19 @@ function startDirectPolling(): void {
       console.log('[blocks] poll reading the workspace again');
       pollReadOk = true;
     }
+    if (!loggedFirstRead) {
+      loggedFirstRead = true;
+      console.log(`[blocks] first workspace read (${blocks.length} chars): ${blocks.slice(0, 200)}`);
+    }
     if (!agreedBlocks) {
       // The canvas has just been built from the document, so this reading is
       // what both sides hold — in the spelling every later comparison uses.
       agreedBlocks = blocks;
     }
     if (blocks !== lastPolled) {
-      console.log(`[blocks] local change detected (${blocks.length} chars)`);
+      console.log(
+        `[blocks] local change detected (${blocks.length} chars): ${blocks.slice(0, 120)}`
+      );
       lastPolled = blocks;
       sync.onLocalChange(blocks, Date.now());
       pump();
