@@ -3,6 +3,7 @@ import type { HostMessage, RendererName, WebviewMessage } from './protocol';
 import {
   SHARED_FILES,
   changedFiles,
+  isShared,
   isEmpty,
   withDeclaredFiles,
   type ProjectText,
@@ -356,8 +357,24 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     const files: ProjectText = {};
     // Sharing the rest of the project is a bonus on top of sharing the blocks.
     // Nothing here is allowed to stop the editor opening.
+
+    // The named files, plus whatever .jres sit beside the document — the image
+    // and tilemap data are in those, and their names are not fixed, so the
+    // folder is listed rather than guessed at.
+    const names = new Set<string>(SHARED_FILES);
+    try {
+      const folder = vscode.Uri.joinPath(document.uri, '..');
+      for (const [entry, kind] of await vscode.workspace.fs.readDirectory(folder)) {
+        if (kind === vscode.FileType.File && isShared(entry)) {
+          names.add(entry);
+        }
+      }
+    } catch {
+      // A file outside any listable folder; the named files are still tried.
+    }
+
     await Promise.all(
-      SHARED_FILES.map(async (name) => {
+      [...names].map(async (name) => {
         try {
           const bytes = await vscode.workspace.fs.readFile(this.siblingUri(document, name));
           files[name] = new TextDecoder().decode(bytes);
@@ -438,7 +455,8 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     try {
       const folder = vscode.Uri.joinPath(document.uri, '..');
       watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(folder, `{${SHARED_FILES.join(',')}}`)
+        // The named files plus any .jres, where the image and tilemap data live.
+        new vscode.RelativePattern(folder, `{${SHARED_FILES.join(',')},*.jres}`)
       );
     } catch {
       // A file outside any workspace folder, or a file system that cannot be

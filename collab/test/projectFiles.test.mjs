@@ -93,6 +93,22 @@ test('an unparseable pxt.json is returned untouched', () => {
   assert.equal(withDeclaredFiles('', ['assets.json']), '');
 });
 
+test('jres files carry the image data and are shared', () => {
+  // The pixels live here, not in the .g.ts that references them. Sharing the
+  // code but not the data was why a drawn image vanished on reload.
+  assert.equal(isShared('images.g.jres'), true);
+  assert.equal(isShared('tilemap.g.jres'), true);
+  assert.equal(isShared('anything.jres'), true);
+});
+
+test('volatile files are never shared', () => {
+  // pxt's private undo log and the simulator's scratch state belong to one
+  // machine; the history especially would flood the folder.
+  assert.equal(isShared('_history'), false);
+  assert.equal(isShared('.simstate.json'), false);
+  assert.equal(isShared('main.blocks'), false);
+});
+
 test('generated asset files are shared', () => {
   // They are declared in pxt.json, which makes them the compiler's business:
   // a project listing a file it does not have fails to build at all.

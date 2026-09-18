@@ -30,23 +30,43 @@ export const SHARED_FILES = [
   'pxt.json',
   'assets.json',
   'main.ts',
-  // Generated from assets.json, but real files in a project on disk, and
-  // declared in pxt.json — which makes them the compiler's business. A project
-  // that lists a file it does not have fails to build at all.
+  // Generated from the assets, but real files on disk, and declared in pxt.json
+  // — which makes them the compiler's business. A project that lists a file it
+  // does not have fails to build at all.
   'images.g.ts',
   'tilemap.g.ts',
 ] as const;
 
+/**
+ * Files that describe the project but must never leave one machine.
+ *
+ * `_history` is pxt's private undo log — large, churns on every keystroke, and
+ * meaningless to anyone else. `.simstate.json` is the simulator's scratch
+ * state. Sharing either is noise at best and, for the history, a flood.
+ */
+const NEVER_SHARED = new Set(['main.blocks', '_history', '.simstate.json']);
+
+/**
+ * Whether a project file is worth sharing.
+ *
+ * The image and tilemap the user paints live in `.jres` files — that is where
+ * the actual pixels are, not in the generated `.g.ts` code that references them.
+ * Sharing the code but not the data was why an imported or drawn image vanished
+ * on reload: the reference survived and the picture did not. So every `.jres` is
+ * shared, alongside the named source files, and the volatile ones never are.
+ */
 export function isShared(name: string): boolean {
-  return (SHARED_FILES as readonly string[]).includes(name);
+  if (NEVER_SHARED.has(name)) {
+    return false;
+  }
+  return (SHARED_FILES as readonly string[]).includes(name) || name.endsWith('.jres');
 }
 
 /** The shareable part of a project's files. */
 export function sharedFiles(text: ProjectText): ProjectText {
   const files: ProjectText = {};
-  for (const name of SHARED_FILES) {
-    const content = text[name];
-    if (typeof content === 'string') {
+  for (const [name, content] of Object.entries(text)) {
+    if (isShared(name) && typeof content === 'string') {
       files[name] = content;
     }
   }

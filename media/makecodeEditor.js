@@ -5,20 +5,23 @@
     "pxt.json",
     "assets.json",
     "main.ts",
-    // Generated from assets.json, but real files in a project on disk, and
-    // declared in pxt.json — which makes them the compiler's business. A project
-    // that lists a file it does not have fails to build at all.
+    // Generated from the assets, but real files on disk, and declared in pxt.json
+    // — which makes them the compiler's business. A project that lists a file it
+    // does not have fails to build at all.
     "images.g.ts",
     "tilemap.g.ts"
   ];
+  var NEVER_SHARED = /* @__PURE__ */ new Set(["main.blocks", "_history", ".simstate.json"]);
   function isShared(name) {
-    return SHARED_FILES.includes(name);
+    if (NEVER_SHARED.has(name)) {
+      return false;
+    }
+    return SHARED_FILES.includes(name) || name.endsWith(".jres");
   }
   function sharedFiles(text) {
     const files = {};
-    for (const name of SHARED_FILES) {
-      const content = text[name];
-      if (typeof content === "string") {
+    for (const [name, content] of Object.entries(text)) {
+      if (isShared(name) && typeof content === "string") {
         files[name] = content;
       }
     }
