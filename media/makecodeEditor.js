@@ -1,22 +1,9 @@
 "use strict";
 (() => {
   // src/shared/projectFiles.ts
-  var SHARED_FILES = [
-    "pxt.json",
-    "assets.json",
-    "main.ts",
-    // Generated from the assets, but real files on disk, and declared in pxt.json
-    // — which makes them the compiler's business. A project that lists a file it
-    // does not have fails to build at all.
-    "images.g.ts",
-    "tilemap.g.ts"
-  ];
   var NEVER_SHARED = /* @__PURE__ */ new Set(["main.blocks", "_history", ".simstate.json"]);
   function isShared(name) {
-    if (NEVER_SHARED.has(name)) {
-      return false;
-    }
-    return SHARED_FILES.includes(name) || name.endsWith(".jres");
+    return !NEVER_SHARED.has(name);
   }
   function sharedFiles(text) {
     const files = {};

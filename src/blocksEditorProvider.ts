@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import type { HostMessage, RendererName, WebviewMessage } from './protocol';
 import {
-  SHARED_FILES,
   changedFiles,
   isShared,
   isEmpty,
@@ -361,16 +360,19 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     // The named files, plus whatever .jres sit beside the document — the image
     // and tilemap data are in those, and their names are not fixed, so the
     // folder is listed rather than guessed at.
-    const names = new Set<string>(SHARED_FILES);
+    const documentName = document.uri.path.split('/').pop();
+    const names = new Set<string>();
     try {
       const folder = vscode.Uri.joinPath(document.uri, '..');
       for (const [entry, kind] of await vscode.workspace.fs.readDirectory(folder)) {
-        if (kind === vscode.FileType.File && isShared(entry)) {
+        // Everything beside the document except the document itself and the
+        // files that must never sync.
+        if (kind === vscode.FileType.File && entry !== documentName && isShared(entry)) {
           names.add(entry);
         }
       }
     } catch {
-      // A file outside any listable folder; the named files are still tried.
+      // A file outside any listable folder; nothing beside it is loaded.
     }
 
     await Promise.all(
@@ -455,8 +457,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     try {
       const folder = vscode.Uri.joinPath(document.uri, '..');
       watcher = vscode.workspace.createFileSystemWatcher(
-        // The named files plus any .jres, where the image and tilemap data live.
-        new vscode.RelativePattern(folder, `{${SHARED_FILES.join(',')},*.jres}`)
+        // Everything in the project folder; the reread below decides what to do
+        // with each, skipping the document and the volatile files.
+        new vscode.RelativePattern(folder, '*')
       );
     } catch {
       // A file outside any workspace folder, or a file system that cannot be
@@ -465,9 +468,12 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
       return undefined;
     }
 
+    const documentName = document.uri.path.split('/').pop();
     const reread = async (uri: vscode.Uri): Promise<void> => {
       const name = uri.path.split('/').pop();
-      if (!name) {
+      if (!name || name === documentName || !isShared(name)) {
+        // The document travels as the text document; the volatile files and
+        // anything held back are not ours to relay.
         return;
       }
       const key = document.uri.toString();

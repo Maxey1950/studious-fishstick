@@ -47,19 +47,18 @@ export const SHARED_FILES = [
 const NEVER_SHARED = new Set(['main.blocks', '_history', '.simstate.json']);
 
 /**
- * Whether a project file is worth sharing.
+' * Whether a project file is worth sharing.
  *
- * The image and tilemap the user paints live in `.jres` files — that is where
- * the actual pixels are, not in the generated `.g.ts` code that references them.
- * Sharing the code but not the data was why an imported or drawn image vanished
- * on reload: the reference survived and the picture did not. So every `.jres` is
- * shared, alongside the named source files, and the volatile ones never are.
+ * Everything in the project folder is shared — blocks, code, images and
+ * tilemaps in their `.jres`, extensions, assets, README — because a fixed list
+ * kept missing things: first the `.jres` where the pixels live, and there would
+ * always be another. The only files held back are the ones that must not sync:
+ * the blocks document itself (it travels as the text document, and giving it a
+ * second owner here would fight that), pxt's private undo log, and the
+ * simulator's scratch state.
  */
 export function isShared(name: string): boolean {
-  if (NEVER_SHARED.has(name)) {
-    return false;
-  }
-  return (SHARED_FILES as readonly string[]).includes(name) || name.endsWith('.jres');
+  return !NEVER_SHARED.has(name);
 }
 
 /** The shareable part of a project's files. */

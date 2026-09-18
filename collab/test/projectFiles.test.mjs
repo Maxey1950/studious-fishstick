@@ -29,13 +29,16 @@ await writeFile(file, outputFiles[0].text);
 const { changedFiles, sharedFiles, withFiles, withDeclaredFiles, withDeclaredStubs, isShared } =
   await import(file);
 
-test('only the three project files are shared', () => {
+test('every project file is shared but the three that must not be', () => {
   assert.equal(isShared('pxt.json'), true);
   assert.equal(isShared('assets.json'), true);
   assert.equal(isShared('main.ts'), true);
-  // The document itself has one owner; writing it as a sibling would give it two.
+  assert.equal(isShared('README.md'), true);
+  assert.equal(isShared('anything.else'), true);
+  // The document travels as the text document; the other two are volatile.
   assert.equal(isShared('main.blocks'), false);
-  assert.equal(isShared('README.md'), false);
+  assert.equal(isShared('_history'), false);
+  assert.equal(isShared('.simstate.json'), false);
 });
 
 test('sharedFiles picks only what exists', () => {
@@ -68,8 +71,11 @@ test('a first write of a file that did not exist is allowed', () => {
   assert.deepEqual(changedFiles({}, { 'assets.json': '' }), {});
 });
 
-test('files outside the shared set are ignored', () => {
-  assert.deepEqual(changedFiles({}, { 'main.blocks': '<xml/>', 'secrets.env': 'x' }), {});
+test('the document is never shared, but other files are', () => {
+  // main.blocks has one owner; a genuine project file rides along.
+  assert.deepEqual(changedFiles({}, { 'main.blocks': '<xml/>', 'notes.txt': 'x' }), {
+    'notes.txt': 'x',
+  });
 });
 
 test('withFiles leaves the blocks alone', () => {
