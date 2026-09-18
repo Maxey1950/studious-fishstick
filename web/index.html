@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VEX IQ Control Panel</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #17191c;
+    --muted: #6b7280;
+    --line: #e2e5ea;
+    --accent: #2f6fed;
+    --ok: #15803d;
+    --warn: #b45309;
+    --bad: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1c1f24; --ink: #e8eaed; --muted: #9aa3af;
+      --line: #2b2f36; --accent: #6ea0ff; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 40px;
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--ink);
+  }
+  .wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  button {
+    font: inherit; padding: 10px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.stop { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 320px; }
+  .pad button { padding: 18px 0; }
+  .pad .spacer { visibility: hidden; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .stat .v { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.connected { background: var(--ok); }
+  .dot.connecting, .dot.reconnecting { background: var(--warn); }
+  label { color: var(--muted); font-size: 13px; }
+  input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
+  #log {
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    height: 190px; overflow-y: auto; margin: 0;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #log .tx { color: var(--accent); }
+  #log .err { color: var(--bad); }
+  #log .sys { color: var(--muted); }
+  .note { color: var(--muted); font-size: 13px; margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="row" style="justify-content: space-between">
+    <h1>VEX IQ Control Panel</h1>
+    <span class="row" style="gap:6px"><span class="dot" id="dot"></span><span id="status">disconnected</span></span>
+  </div>
+
+  <div class="panel row">
+    <button id="connect" class="primary">Connect</button>
+    <button id="disconnect" disabled>Disconnect</button>
+    <button id="ping" disabled>Ping</button>
+    <p class="note" id="support"></p>
+  </div>
+
+  <div class="panel">
+    <div class="stats">
+      <div class="stat"><div class="k">Battery</div><div class="v" id="battery">--</div></div>
+      <div class="stat"><div class="k">Left / Right</div><div class="v" id="speed">-- / --</div></div>
+      <div class="stat"><div class="k">Round trip</div><div class="v" id="rtt">--</div></div>
+      <div class="stat"><div class="k">Lines dropped</div><div class="v" id="dropped">0</div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:14px">
+      <label for="speedRange">Speed</label>
+      <input type="range" id="speedRange" min="0" max="100" value="50">
+      <output id="speedOut" style="font-variant-numeric:tabular-nums">50%</output>
+    </div>
+    <div class="pad">
+      <span class="spacer"></span>
+      <button data-cmd="FORWARD" disabled>&#9650;</button>
+      <span class="spacer"></span>
+      <button data-cmd="LEFT" disabled>&#9664;</button>
+      <button data-cmd="STOP" class="stop" disabled>STOP</button>
+      <button data-cmd="RIGHT" disabled>&#9654;</button>
+      <span class="spacer"></span>
+      <button data-cmd="BACK" disabled>&#9660;</button>
+      <span class="spacer"></span>
+    </div>
+    <p class="note" style="margin-top:12px">
+      Hold a direction to drive; releasing sends STOP. Arrow keys and space work too.
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="justify-content:space-between; margin-bottom:8px">
+      <strong style="font-size:13px">Link log</strong>
+      <button id="clearLog" style="padding:4px 10px; font-size:12px">Clear</button>
+    </div>
+    <pre id="log"></pre>
+  </div>
+
+</div>
+
+<script type="module">
+import { SerialLink } from './serial-link.js';
+
+const $ = (id) => document.getElementById(id);
+const link = new SerialLink();
+
+const cmdButtons = [...document.querySelectorAll('.pad button')];
+const controls = [...cmdButtons, $('disconnect'), $('ping')];
+let pingSentAt = 0;
+
+// --- logging ---------------------------------------------------------------
+
+function log(text, kind = '') {
+  const el = $('log');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const time = new Date().toLocaleTimeString([], { hour12: false });
+  const span = document.createElement('span');
+  if (kind) span.className = kind;
+  span.textContent = `${time}  ${text}\n`;
+  el.appendChild(span);
+  while (el.childNodes.length > 400) el.removeChild(el.firstChild);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+// --- link wiring -----------------------------------------------------------
+
+link.on('status', ({ status, detail }) => {
+  $('status').textContent = status;
+  $('dot').className = `dot ${status}`;
+  const up = status === 'connected';
+  $('connect').disabled = up || status === 'connecting';
+  controls.forEach((b) => { b.disabled = !up; });
+  log(`link ${status}${detail ? `: ${detail}` : ''}`, 'sys');
+  if (!up) { $('battery').textContent = '--'; $('speed').textContent = '-- / --'; }
+});
+
+link.on('sent', (text) => log(`> ${text}`, 'tx'));
+link.on('error', (err) => {
+  log(`! ${err.message}`, 'err');
+  $('dropped').textContent = String(link.droppedLines);
+});
+
+link.on('message', ({ verb, args, raw }) => {
+  switch (verb) {
+    case 'BATTERY':
+      $('battery').textContent = `${args[0] ?? '--'}%`;
+      return;                                   // routine telemetry: not logged
+    case 'SPEED':
+      $('speed').textContent = `${args[0] ?? '--'} / ${args[1] ?? '--'}`;
+      return;
+    case 'PONG':
+      $('rtt').textContent = `${Date.now() - pingSentAt} ms`;
+      break;
+    case 'DROPPED':
+      $('dropped').textContent = args[0] ?? '0';
+      break;
+  }
+  log(`< ${raw}`);
+});
+
+// --- commands --------------------------------------------------------------
+
+const speed = () => Number($('speedRange').value);
+
+function send(verb, args = []) {
+  link.send(verb, args).catch((err) => log(`! send failed: ${err.message}`, 'err'));
+}
+
+const drive = (verb) => send(verb, verb === 'STOP' ? [] : [speed()]);
+
+$('connect').addEventListener('click', async () => {
+  try {
+    await link.connect();
+  } catch (err) {
+    // A cancelled port chooser is a normal outcome, not an error worth shouting about.
+    if (err.name !== 'NotFoundError') log(`! ${err.message}`, 'err');
+  }
+});
+
+$('disconnect').addEventListener('click', () => link.disconnect());
+$('clearLog').addEventListener('click', () => { $('log').textContent = ''; });
+
+$('ping').addEventListener('click', () => {
+  pingSentAt = Date.now();
+  send('PING', [pingSentAt % 100000]);
+});
+
+$('speedRange').addEventListener('input', (e) => {
+  $('speedOut').textContent = `${e.target.value}%`;
+});
+
+// Press-and-hold: pointer events cover mouse, touch and pen with one path,
+// and pointercancel fires when a drag or scroll steals the gesture.
+for (const button of cmdButtons) {
+  const verb = button.dataset.cmd;
+  if (verb === 'STOP') {
+    button.addEventListener('click', () => drive('STOP'));
+    continue;
+  }
+  button.addEventListener('pointerdown', (e) => {
+    button.setPointerCapture(e.pointerId);
+    drive(verb);
+  });
+  const release = () => { if (link.connected) drive('STOP'); };
+  button.addEventListener('pointerup', release);
+  button.addEventListener('pointercancel', release);
+  button.addEventListener('lostpointercapture', release);
+}
+
+const KEYS = {
+  ArrowUp: 'FORWARD', ArrowDown: 'BACK',
+  ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  ' ': 'STOP',
+};
+const heldKeys = new Set();
+
+window.addEventListener('keydown', (e) => {
+  const verb = KEYS[e.key];
+  if (!verb || !link.connected) return;
+  e.preventDefault();
+  if (e.repeat || heldKeys.has(e.key)) return;   // one command per press
+  heldKeys.add(e.key);
+  drive(verb);
+});
+
+window.addEventListener('keyup', (e) => {
+  if (!heldKeys.delete(e.key)) return;
+  if (link.connected && KEYS[e.key] !== 'STOP') drive('STOP');
+});
+
+// Losing focus must not leave the robot driving on a stale key-down.
+window.addEventListener('blur', () => {
+  heldKeys.clear();
+  if (link.connected) drive('STOP');
+});
+
+if (!SerialLink.supported) {
+  $('support').textContent = 'Web Serial is unavailable here - use Chrome or Edge over HTTPS or localhost.';
+  $('connect').disabled = true;
+}
+</script>
+</body>
+</html>
