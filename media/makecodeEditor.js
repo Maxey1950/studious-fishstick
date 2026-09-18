@@ -69,11 +69,14 @@
     for (const entry of declared) {
       const name = String(entry);
       if (text[name] === void 0) {
-        text[name] = "";
+        text[name] = emptyStubFor(name);
         added = true;
       }
     }
     return added ? { ...project2, text } : project2;
+  }
+  function emptyStubFor(name) {
+    return /\.(jres|json)$/i.test(name) ? "{}" : "";
   }
 
   // src/shared/arcadeProtocol.ts

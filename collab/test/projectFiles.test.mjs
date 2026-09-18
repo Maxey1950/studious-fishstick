@@ -100,6 +100,22 @@ test('generated asset files are shared', () => {
   assert.equal(isShared('tilemap.g.ts'), true);
 });
 
+test('a declared jres is stubbed as valid JSON, not empty', () => {
+  // The bug: an empty string is not JSON, so the moment the editor parses a
+  // .jres it throws "Unexpected end of JSON input", the image/tilemap project
+  // fails to load, and nothing saves. A project with images always declares one.
+  const project = {
+    header: {},
+    text: {
+      'pxt.json': JSON.stringify({ files: ['main.blocks', 'main.ts', 'main.jres'] }),
+    },
+  };
+  const stubbed = withDeclaredStubs(project);
+  assert.equal(stubbed.text['main.jres'], '{}');
+  assert.doesNotThrow(() => JSON.parse(stubbed.text['main.jres']));
+  assert.equal(stubbed.text['main.ts'], '', 'a .ts stub stays empty');
+});
+
 test('every declared file exists, even if empty', () => {
   const project = {
     header: {},

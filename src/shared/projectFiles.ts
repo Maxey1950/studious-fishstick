@@ -132,8 +132,12 @@ export function withDeclaredFiles(config: string, names: string[]): string {
  * editor writes from `assets.json` and which are therefore missing for anyone
  * holding a project assembled from a `.blocks` file alone.
  *
- * Missing files are supplied empty, which compiles cleanly and which the editor
- * overwrites with the real contents as soon as it regenerates them.
+ * Missing files are supplied with the emptiest valid content for their kind,
+ * which the editor overwrites as soon as it regenerates them. "Valid" matters:
+ * a .jres or .json is parsed as JSON the moment the project loads, and an empty
+ * string is not JSON — it throws "Unexpected end of JSON input", the image and
+ * tilemap project fails to initialize, and the editor wedges so that nothing
+ * saves. An empty object parses, so those files get `{}` and the rest get "".
  */
 export function withDeclaredStubs<T extends { text: ProjectText }>(project: T): T {
   const config = project.text['pxt.json'];
@@ -156,9 +160,14 @@ export function withDeclaredStubs<T extends { text: ProjectText }>(project: T): 
   for (const entry of declared) {
     const name = String(entry);
     if (text[name] === undefined) {
-      text[name] = '';
+      text[name] = emptyStubFor(name);
       added = true;
     }
   }
   return added ? { ...project, text } : project;
+}
+
+/** The emptiest content a stubbed file can have without breaking its parser. */
+function emptyStubFor(name: string): string {
+  return /\.(jres|json)$/i.test(name) ? '{}' : '';
 }
