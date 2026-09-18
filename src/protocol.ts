@@ -34,6 +34,8 @@ export type HostMessage =
   /** The underlying text document changed — from undo, a text editor on the
    * same file, or a Live Share participant. */
   | { type: 'update'; xml: string }
+  /** Diagnostic: the host's result of writing an edit, echoed for the console. */
+  | { type: 'wrote'; ok: boolean; detail: string }
   /** A project file beside the document changed: someone added an extension or
    * painted a sprite. */
   | { type: 'projectUpdate'; files: Record<string, string> };

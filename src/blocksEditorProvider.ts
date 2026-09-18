@@ -43,6 +43,9 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
    */
   private readonly history = new Map<string, Version[]>();
 
+  /** Posts a diagnostic message to the active webview, when there is one. */
+  private notify?: (message: HostMessage) => void;
+
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   /**
@@ -115,6 +118,8 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     const post = (message: HostMessage): void => {
       void webview.postMessage(message);
     };
+    // writeBack runs outside this closure; give it a way to reach this webview.
+    this.notify = post;
 
     const disposables: vscode.Disposable[] = [];
 
@@ -487,6 +492,13 @@ export class BlocksEditorProvider implements vscode.CustomTextEditorProvider {
     );
 
     const applied = await vscode.workspace.applyEdit(edit);
+    // Echoed to the webview so the outcome shows up in the same console as the
+    // rest of the sync trace, rather than in a separate host log.
+    this.notify?.({
+      type: 'wrote',
+      ok: applied,
+      detail: applied ? `${change.replacement.length} chars at ${change.start}` : 'applyEdit refused',
+    });
     if (!applied) {
       void vscode.window.showErrorMessage(
         'Blocks Editor: could not write the block change to the file.'

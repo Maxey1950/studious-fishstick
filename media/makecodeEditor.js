@@ -1192,6 +1192,7 @@ ${lines.join("\n")}`);
   var pollTimer;
   var lastPolled;
   var reportedApi = false;
+  var pollReadOk = true;
   async function startEditor(sameOrigin, requireCorp) {
     if (!sameOrigin) {
       loadEditor(ARCADE_EDITOR_URL);
@@ -1249,10 +1250,22 @@ ${lines.join("\n")}`);
         return;
       }
       const blocks = readBlocksDirectly(reach, frame.contentWindow);
-      if (blocks && !agreedBlocks) {
+      if (!blocks) {
+        if (pollReadOk) {
+          console.warn("[blocks] poll read nothing from the workspace");
+          pollReadOk = false;
+        }
+        return;
+      }
+      if (!pollReadOk) {
+        console.log("[blocks] poll reading the workspace again");
+        pollReadOk = true;
+      }
+      if (!agreedBlocks) {
         agreedBlocks = blocks;
       }
-      if (blocks && blocks !== lastPolled) {
+      if (blocks !== lastPolled) {
+        console.log(`[blocks] local change detected (${blocks.length} chars)`);
         lastPolled = blocks;
         sync.onLocalChange(blocks, Date.now());
         pump();
@@ -1295,6 +1308,7 @@ ${lines.join("\n")}`);
     }
     switch (effect.kind) {
       case "broadcast":
+        console.log(`[blocks] writing change to file (${effect.blocks.length} chars)`);
         post({ type: "edit", xml: effect.blocks });
         agreedBlocks = reach?.workspace && readBlocksDirectly(reach, frame.contentWindow) || effect.blocks;
         pump();
@@ -1371,6 +1385,11 @@ ${lines.join("\n")}`);
     const data = event.data;
     if (data?.type === "init" || data?.type === "update" || data?.type === "projectUpdate") {
       handleHostMessage(data);
+      return;
+    }
+    if (data?.type === "wrote") {
+      const wrote = data;
+      console.log(`[blocks] host ${wrote.ok ? "wrote to file" : "FAILED to write"}: ${wrote.detail}`);
       return;
     }
     if (data?.type === "blocksEditorSave") {

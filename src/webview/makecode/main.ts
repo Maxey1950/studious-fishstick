@@ -69,6 +69,8 @@ let pollTimer: number | undefined;
 let lastPolled: string | undefined;
 /** The editor's API is reported once, not on every probe. */
 let reportedApi = false;
+/** Whether the last poll read produced XML, so a change to "nothing" is logged once. */
+let pollReadOk = true;
 
 /**
  * Starts the editor, same-origin when asked for.
@@ -166,12 +168,27 @@ function startDirectPolling(): void {
       return;
     }
     const blocks = readBlocksDirectly(reach!, frame.contentWindow as unknown);
-    if (blocks && !agreedBlocks) {
+    if (!blocks) {
+      // A read that comes back empty when it used to work is worth one line —
+      // it means the workspace stopped being reachable, which looks exactly
+      // like "it stopped saving".
+      if (pollReadOk) {
+        console.warn('[blocks] poll read nothing from the workspace');
+        pollReadOk = false;
+      }
+      return;
+    }
+    if (!pollReadOk) {
+      console.log('[blocks] poll reading the workspace again');
+      pollReadOk = true;
+    }
+    if (!agreedBlocks) {
       // The canvas has just been built from the document, so this reading is
       // what both sides hold — in the spelling every later comparison uses.
       agreedBlocks = blocks;
     }
-    if (blocks && blocks !== lastPolled) {
+    if (blocks !== lastPolled) {
+      console.log(`[blocks] local change detected (${blocks.length} chars)`);
       lastPolled = blocks;
       sync.onLocalChange(blocks, Date.now());
       pump();
@@ -257,6 +274,7 @@ function pump(): void {
     case 'broadcast':
       // "Broadcast" here means writing to the document; Live Share does the
       // rest, the same way it does for the Blockly engine.
+      console.log(`[blocks] writing change to file (${effect.blocks.length} chars)`);
       post({ type: 'edit', xml: effect.blocks });
       // Sent, so this is what both sides know about now — recorded in the
       // workspace's own spelling when there is one to read, since that is what
@@ -409,6 +427,12 @@ window.addEventListener('message', (event: MessageEvent) => {
 
   if (data?.type === 'init' || data?.type === 'update' || data?.type === 'projectUpdate') {
     handleHostMessage(data as HostMessage);
+    return;
+  }
+
+  if (data?.type === 'wrote') {
+    const wrote = data as { ok: boolean; detail: string };
+    console.log(`[blocks] host ${wrote.ok ? 'wrote to file' : 'FAILED to write'}: ${wrote.detail}`);
     return;
   }
 
