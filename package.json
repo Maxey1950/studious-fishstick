@@ -1,0 +1,186 @@
+{
+  "name": "blocks-editor-web",
+  "displayName": "Blocks Editor (.blocks)",
+  "description": "Visual Blockly editor for MakeCode .blocks files. Runs in vscode.dev and co-edits over Live Share.",
+  "version": "0.2.9",
+  "publisher": "MaxeyTheCat",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "blockly",
+    "makecode",
+    "blocks",
+    "live share",
+    "web"
+  ],
+  "browser": "./dist/web/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": true
+  },
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "blocks-xml",
+        "aliases": [
+          "Blocks (Blockly XML)"
+        ],
+        "extensions": [
+          ".blocks"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "blocks-xml",
+        "scopeName": "text.xml",
+        "path": "./syntaxes/blocks-xml.tmLanguage.json"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "blocksEditor.blocks",
+        "displayName": "Blocks Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.blocks"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "blocksEditor.restoreVersion",
+        "title": "Blocks: Restore an Earlier Version"
+      },
+      {
+        "command": "blocksEditor.openAsText",
+        "title": "Blocks: Open Active File as XML Text"
+      },
+      {
+        "command": "blocksEditor.openAsBlocks",
+        "title": "Blocks: Open Active File in Blocks Editor"
+      }
+    ],
+    "configuration": {
+      "title": "Blocks Editor",
+      "properties": {
+        "blocksEditor.writeDebounceMs": {
+          "type": "number",
+          "default": 100,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "How long to wait after the last block change before writing it to the file. Lower means collaborators see your changes sooner, at the cost of more document revisions."
+        },
+        "blocksEditor.renderer": {
+          "type": "string",
+          "enum": [
+            "pxt",
+            "zelos",
+            "geras",
+            "thrasos"
+          ],
+          "default": "pxt",
+          "description": "Which renderer draws the blocks.",
+          "enumDescriptions": [
+            "MakeCode's own renderer, ported from pxt. Blocks get the exact geometry the Arcade editor draws.",
+            "Blockly’s rounded renderer, which pxt’s is derived from.",
+            "Blockly’s classic renderer.",
+            "Blockly’s thin renderer."
+          ]
+        },
+        "blocksEditor.engine": {
+          "type": "string",
+          "enum": [
+            "makecode",
+            "blockly"
+          ],
+          "enumDescriptions": [
+            "Embed the real MakeCode Arcade editor. Every block, the image and tilemap editors and the simulator are the genuine ones. Requires access to arcade.makecode.com.",
+            "Use the built-in Blockly editor. Works with no network access, and merges simultaneous edits more finely, but does not include MakeCode’s tilemap, melody or grid editors."
+          ],
+          "default": "makecode",
+          "description": "Which editor to draw .blocks files with."
+        },
+        "blocksEditor.embedElement": {
+          "type": "string",
+          "enum": [
+            "credentialless",
+            "blob",
+            "iframe",
+            "object",
+            "embed"
+          ],
+          "enumDescriptions": [
+            "A credentialless iframe. Works on vscode.dev, where the embedder policy refuses an ordinary cross-origin iframe. The editor stays cross-origin, so a collaborator’s change has to be applied with importproject, which reloads the editor.",
+            "Experimental. Fetches MakeCode’s page and loads it from a blob, which makes the editor same-origin with this webview. That allows applying a change directly to its workspace, with no reload — if MakeCode tolerates running from a blob origin.",
+            "A standard iframe. Works in desktop VS Code; refused on vscode.dev.",
+            "<object>. Refused on vscode.dev.",
+            "<embed>. Refused on vscode.dev."
+          ],
+          "default": "credentialless",
+          "description": "Which element embeds the MakeCode editor. \"credentialless\" is the one that works under vscode.dev’s embedder policy."
+        },
+        "blocksEditor.highlightRemoteChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Briefly outline blocks when a collaborator changes them. Without it a remote change is silent — blocks rearrange themselves with nothing to say why."
+        },
+        "blocksEditor.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Save the file automatically once a block change settles. MakeCode has no unsaved-project state, so the file is kept saved to match. Turn this off to manage saving yourself."
+        },
+        "blocksEditor.autoSaveDelayMs": {
+          "type": "number",
+          "default": 800,
+          "minimum": 100,
+          "maximum": 10000,
+          "description": "How long block changes must stop before the file is saved, so a drag is one write rather than one per frame."
+        },
+        "blocksEditor.remoteApplyDelayMs": {
+          "type": "number",
+          "default": 150,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "How long you must be idle before someone else's change is applied. Changes are applied block by block and never while you are dragging, so this can be short. If you are not editing, changes appear immediately regardless. Lower is more live; 0 applies them the moment they arrive."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "compile": "npm run vendor && node esbuild.mjs",
+    "watch": "npm run vendor && node esbuild.mjs --watch",
+    "package": "npm run vendor && node esbuild.mjs --production",
+    "typecheck": "tsc --noEmit",
+    "open-in-browser": "npm run compile && vscode-test-web --browserType=chromium --extensionDevelopmentPath=. ./sample",
+    "test": "npm run compile && node test/roundtrip.mjs && node --test collab/test/*.test.mjs",
+    "arcade:refresh": "node scripts/fetchArcade.mjs && node scripts/generateArcadeBlocks.mjs",
+    "probe:embed": "node probe/serve.mjs",
+    "test:collab": "node collab/test/syncState.test.mjs && node collab/test/arcadeProtocol.test.mjs",
+    "vsix": "npm run compile && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@vscode/test-web": "^0.0.81",
+    "@vscode/vsce": "^3.2.0",
+    "blockly": "^13.3.0",
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0",
+    "playwright": "^1.63.0",
+    "typescript": "^5.6.0"
+  }
+}

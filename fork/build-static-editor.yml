@@ -1,0 +1,91 @@
+# Builds a self-contained MakeCode Arcade editor that can be bundled into the
+# VS Code extension and served from its webview.
+#
+# PUT THIS IN YOUR FORK OF pxt-arcade, at .github/workflows/build-static-editor.yml
+# Then: Actions -> "Build static Arcade editor" -> Run workflow.
+# When it finishes, download the "arcade-static-editor" artifact.
+#
+# Why this exists: serving the editor from the extension itself makes it
+# same-origin with the webview. That removes the cross-origin embedder policy
+# problem entirely, works with no network, and — the point of forking — lets us
+# add an incremental update API so a collaborator's change no longer reloads the
+# whole editor.
+
+name: Build static Arcade editor
+
+on:
+  workflow_dispatch:
+    inputs:
+      minify:
+        description: 'Minify (smaller, slower build)'
+        type: boolean
+        default: true
+      node_version:
+        description: 'Node version (18 matches what pxt-arcade expects)'
+        type: choice
+        options: ['18', '16', '20']
+        default: '18'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The full target build is slow; give it room.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # pxt-arcade pins typescript 4.8 and @types/node ^9. Building it on a
+          # newer Node produces a flood of type errors from that mismatch alone
+          # — over a hundred — rather than from anything actually wrong. 18 is
+          # what this generation of pxt was built against.
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install
+        # The dependency tree predates current peer-dependency rules, so npm
+        # refuses it outright without this.
+        run: npm install --legacy-peer-deps
+
+      - name: Copy the simulator
+        # pxt-arcade's own "copy-sim" script; the simulator is a separate piece
+        # and staticpkg expects it in place.
+        run: node ./scripts/copyArcadeSim.js
+        continue-on-error: true
+
+      - name: Show versions
+        # Worth having in the log: nearly every failure here is a version
+        # mismatch rather than a real build problem.
+        run: |
+          node --version
+          npx tsc --version || true
+          node -e "const p=require('./package.json');console.log('pxt-core',p.dependencies['pxt-core'])"
+
+      - name: Build the static editor
+        # --route ./ makes every generated URL relative, which is required when
+        # the editor is served from an arbitrary path (a webview URI) rather
+        # than from a domain root.
+        # --no-appcache disables the service worker, which cannot register from
+        # the extension's origin anyway.
+        run: |
+          node node_modules/pxt-core/built/pxt.js staticpkg \
+            --route ./ \
+            --output built/packaged \
+            --no-appcache \
+            ${{ inputs.minify && '--minify' || '' }}
+
+      - name: Report what was built
+        run: |
+          echo "## Static editor built" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          du -sh built/packaged >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          find built/packaged -maxdepth 2 -type d | head -30 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arcade-static-editor
+          path: built/packaged
+          retention-days: 14

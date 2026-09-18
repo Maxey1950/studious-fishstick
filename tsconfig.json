@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable",
+      "WebWorker"
+    ],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "useDefineForClassFields": false
+  },
+  "include": [
+    "src",
+    "test"
+  ]
+}
