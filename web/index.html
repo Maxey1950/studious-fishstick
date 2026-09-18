@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VEX IQ Control Panel</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232f6fed'/%3E%3Crect x='4' y='5' width='8' height='6' rx='1' fill='white'/%3E%3C/svg%3E">
 <style>
   :root {
     color-scheme: light dark;
@@ -53,6 +54,12 @@
   .dot.connecting, .dot.reconnecting { background: var(--warn); }
   label { color: var(--muted); font-size: 13px; }
   input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
+  select, input[type=text], input:not([type]) {
+    font: inherit; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  }
+  input:not([type]) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  code { font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 4px; }
   #log {
     font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
     height: 190px; overflow-y: auto; margin: 0;
@@ -73,11 +80,34 @@
     <span class="row" style="gap:6px"><span class="dot" id="dot"></span><span id="status">disconnected</span></span>
   </div>
 
-  <div class="panel row">
-    <button id="connect" class="primary">Connect</button>
-    <button id="disconnect" disabled>Disconnect</button>
-    <button id="ping" disabled>Ping</button>
-    <p class="note" id="support"></p>
+  <div class="panel">
+    <div class="row">
+      <label for="transport">Connection</label>
+      <select id="transport">
+        <option value="usb" selected>USB-C cable (Web Serial)</option>
+        <option value="btserial">Bluetooth serial / SPP (Web Serial)</option>
+        <option value="ble">Bluetooth LE (Web Bluetooth)</option>
+      </select>
+      <button id="connect" class="primary">Connect</button>
+      <button id="disconnect" disabled>Disconnect</button>
+      <button id="ping" disabled>Ping</button>
+    </div>
+
+    <details id="bleSettings" hidden style="margin-top:12px">
+      <summary style="cursor:pointer; color:var(--muted); font-size:13px">BLE service UUIDs</summary>
+      <p class="note" style="margin:8px 0">
+        The defaults are the Nordic UART Service, the common &ldquo;serial over BLE&rdquo;
+        convention &mdash; almost certainly <em>not</em> your brain&rsquo;s. Find the real ones with
+        <code>chrome://bluetooth-internals</code> (see the README).
+      </p>
+      <div class="row" style="gap:8px">
+        <input id="bleService" placeholder="service UUID" size="38">
+        <input id="bleWrite" placeholder="write characteristic" size="38">
+        <input id="bleNotify" placeholder="notify characteristic" size="38">
+      </div>
+    </details>
+
+    <p class="note" id="support" style="margin-top:12px"></p>
   </div>
 
   <div class="panel">
@@ -122,10 +152,33 @@
 </div>
 
 <script type="module">
-import { SerialLink } from './serial-link.js';
+import {
+  SerialLink, SerialTransport, BleTransport, NORDIC_UART, describeEnvironment,
+} from './serial-link.js';
 
 const $ = (id) => document.getElementById(id);
 const link = new SerialLink();
+
+// Some brains expose a custom RFCOMM service rather than standard SPP. Such a
+// port is not even offered in the chooser unless its service class ID is listed
+// here, so add yours if the Bluetooth-serial chooser comes up empty.
+const CUSTOM_RFCOMM_SERVICE_IDS = [];
+
+function buildTransport(kind) {
+  if (kind === 'ble') {
+    return new BleTransport({
+      service: $('bleService').value.trim() || NORDIC_UART.service,
+      writeCharacteristic: $('bleWrite').value.trim() || NORDIC_UART.write,
+      notifyCharacteristic: $('bleNotify').value.trim() || NORDIC_UART.notify,
+    });
+  }
+  // USB and Bluetooth serial are the same API; the difference is only which
+  // ports the chooser offers.
+  return new SerialTransport({
+    allowedBluetoothServiceClassIds:
+      kind === 'btserial' ? CUSTOM_RFCOMM_SERVICE_IDS : [],
+  });
+}
 
 const cmdButtons = [...document.querySelectorAll('.pad button')];
 const controls = [...cmdButtons, $('disconnect'), $('ping')];
@@ -147,13 +200,15 @@ function log(text, kind = '') {
 
 // --- link wiring -----------------------------------------------------------
 
-link.on('status', ({ status, detail }) => {
+link.on('status', ({ status, detail, transport }) => {
   $('status').textContent = status;
   $('dot').className = `dot ${status}`;
   const up = status === 'connected';
-  $('connect').disabled = up || status === 'connecting';
   controls.forEach((b) => { b.disabled = !up; });
-  log(`link ${status}${detail ? `: ${detail}` : ''}`, 'sys');
+  $('transport').disabled = up || status === 'connecting';
+  describeSupport();
+  const via = status === 'connected' && transport ? ` via ${transport}` : '';
+  log(`link ${status}${via}${detail ? `: ${detail}` : ''}`, 'sys');
   if (!up) { $('battery').textContent = '--'; $('speed').textContent = '-- / --'; }
 });
 
@@ -193,11 +248,17 @@ const drive = (verb) => send(verb, verb === 'STOP' ? [] : [speed()]);
 
 $('connect').addEventListener('click', async () => {
   try {
+    link.setTransport(buildTransport($('transport').value));
     await link.connect();
   } catch (err) {
-    // A cancelled port chooser is a normal outcome, not an error worth shouting about.
+    // A cancelled chooser is a normal outcome, not an error worth shouting about.
     if (err.name !== 'NotFoundError') log(`! ${err.message}`, 'err');
   }
+});
+
+$('transport').addEventListener('change', (e) => {
+  $('bleSettings').hidden = e.target.value !== 'ble';
+  describeSupport();
 });
 
 $('disconnect').addEventListener('click', () => link.disconnect());
@@ -257,10 +318,33 @@ window.addEventListener('blur', () => {
   if (link.connected) drive('STOP');
 });
 
-if (!SerialLink.supported) {
-  $('support').textContent = 'Web Serial is unavailable here - use Chrome or Edge over HTTPS or localhost.';
-  $('connect').disabled = true;
+function describeSupport() {
+  const env = describeEnvironment();
+  const kind = $('transport').value;
+  const needsBle = kind === 'ble';
+  const available = needsBle ? env.webBluetooth : env.webSerial;
+
+  $('connect').disabled = !available || link.connected;
+
+  // Drop the generic note for whichever API we are about to report on
+  // specifically, so the message does not say the same thing twice.
+  const irrelevant = needsBle ? /Web Bluetooth/ : /Web Serial/;
+  const notes = env.notes.filter((n) => available || !irrelevant.test(n));
+
+  if (!available) {
+    notes.unshift(needsBle
+      ? 'Web Bluetooth is unavailable here.'
+      : 'Web Serial is unavailable here - use Chrome or Edge.');
+  } else if (kind === 'btserial') {
+    notes.unshift('Pair the brain in system Bluetooth settings first, then Connect. If it does not appear, the brain is BLE-only - switch to Bluetooth LE.');
+  }
+  $('support').textContent = notes.join(' ');
 }
+
+$('bleService').placeholder = NORDIC_UART.service;
+$('bleWrite').placeholder = NORDIC_UART.write;
+$('bleNotify').placeholder = NORDIC_UART.notify;
+describeSupport();
 </script>
 </body>
 </html>

@@ -1,12 +1,15 @@
 # VEX IQ (2nd gen) Browser Control Panel
 
-A Chrome Web Serial control panel for a VEX IQ 2 brain over a Bluetooth virtual
-COM port, with a matching C++ command parser for the robot side.
+A browser control panel for a VEX IQ 2 brain, with a matching C++ command
+parser for the robot side. Runs on a Chromebook: USB-C over Web Serial by
+default, with Bluetooth SPP and BLE as selectable fallbacks.
 
 ```
-web/index.html      control panel UI
-web/serial-link.js  Web Serial transport: chunk-safe reader, queued writer
-web/serial-link.test.mjs   read-loop tests against a fake serial port
+web/index.html         control panel UI, with a USB / Bluetooth / BLE picker
+web/line-framer.js     framing: bytes in, complete lines out (no I/O)
+web/transports.js      SerialTransport (USB + Bluetooth RFCOMM), BleTransport
+web/serial-link.js     transport-agnostic link: read loop, write queue, keep-alive
+web/serial-link.test.mjs   26 tests over the framer, link and transports
 
 robot/include/vex_protocol.h   framing + parsing API
 robot/src/vex_protocol.cpp     implementation (no dynamic allocation)
@@ -17,12 +20,102 @@ robot/test/                    host-side tests (plain g++, no VEX SDK needed)
 Run the tests:
 
 ```
-make -C robot/test run     # 98 checks
-node web/serial-link.test.mjs   # 14 tests
+make -C robot/test run          # 98 checks
+node web/serial-link.test.mjs   # 26 tests
 ```
 
-Serve `web/` over `localhost` or HTTPS (Web Serial requires a secure context),
-e.g. `python3 -m http.server -d web 8000`.
+The page needs a secure context. On a laptop, `python3 -m http.server -d web 8000`
+and open `http://localhost:8000`. On a Chromebook, see below.
+
+---
+
+## Running on a Chromebook
+
+Worth stating plainly: **a "Bluetooth virtual COM port" is a Windows concept.**
+ChromeOS has no user-visible COM port mapping, so the single assumption the
+original design rested on does not hold there. There are three separate paths
+instead, and the panel lets you pick between them at connect time.
+
+### 1. USB-C cable — the path that always works
+
+ChromeOS has supported Web Serial since Chrome 89, and the brain enumerates as
+an ordinary USB CDC device. This is what web-based VEXcode IQ itself uses on a
+Chromebook, it needs no pairing, and it is the panel's default. **If the goal is
+"working on a Chromebook today", stop here.**
+
+### 2. Bluetooth SPP / RFCOMM through Web Serial
+
+Chrome 117 added RFCOMM support to Web Serial, and ChromeOS was the first
+platform to ship it — so this genuinely can work, with two conditions:
+
+- the brain must be **paired in ChromeOS Settings first**; Web Serial only
+  offers already-paired Bluetooth devices;
+- the brain must speak **Bluetooth Classic**. If it is BLE-only, no amount of
+  pairing will make a serial port appear, and you want path 3.
+
+If the brain exposes a *custom* RFCOMM service rather than standard SPP, its
+port is not offered in the chooser at all until you list its service class ID:
+
+```js
+new SerialTransport({ allowedBluetoothServiceClassIds: ['<uuid>'] })
+```
+
+`CUSTOM_RFCOMM_SERVICE_IDS` at the top of `index.html` is where to put it.
+
+### 3. Web Bluetooth (BLE GATT)
+
+VEX documents the IQ 2nd gen brain as having a Bluetooth 5.0 radio used for
+wireless connections to tablets, but does not publish whether that is Classic
+or BLE — and BLE is the likelier answer given how VEXcode connects from iPads.
+BLE is not a serial port: it is a write characteristic plus a notify
+characteristic, so `BleTransport` adapts it to the same byte-stream interface.
+
+**Finding the BLE UUIDs.** The defaults are the Nordic UART Service, the
+de-facto convention for serial-over-BLE, and are almost certainly not your
+brain's. To find the real ones:
+
+1. open `chrome://bluetooth-internals/#devices` on the Chromebook;
+2. **Start Scan**, find the brain, click **Inspect**;
+3. expand its services and note the service UUID plus the two characteristics —
+   the one with `notify` is the robot→browser channel, the one with `write` or
+   `write-without-response` is browser→robot;
+4. paste all three into the panel's **BLE service UUIDs** box.
+
+If no service looks like a byte pipe, the brain does not expose a general
+telemetry channel over BLE and USB is the answer.
+
+### Serving the page
+
+Web Serial and Web Bluetooth both require a secure context, and `file://` does
+not qualify. Chromebooks have no convenient localhost without enabling the Linux
+container, so `.github/workflows/pages.yml` publishes `web/` to GitHub Pages on
+every push to `main` (enable it once under **Settings → Pages → Source: GitHub
+Actions**). Open the Pages URL on the Chromebook and connect from there.
+
+### What this changed in the code
+
+The framing logic did not change at all — which is the point of having split it
+out. `LineFramer` is pure and transport-independent, transports only move bytes,
+and `SerialLink` owns the read loop, write queue and keep-alive regardless of
+what is underneath.
+
+BLE did add one hard constraint: the default ATT MTU is 23 bytes, of which 3 are
+overhead, so **every** write is chunked at 20 bytes and every notification
+arrives capped at 20 bytes. `ARCADE:100,-100\n` does not fit in one packet. That
+makes two of the original design decisions load-bearing rather than merely
+tidy:
+
+- the framer must reassemble, because on BLE a split line is not an edge case
+  produced by unlucky timing — it is guaranteed on every line;
+- the write queue must serialise, because two concurrent sends would interleave
+  their 20-byte chunks and corrupt both lines.
+
+Both have tests pinned to a 20-byte cap (`framer survives a 20-byte BLE MTU cap`,
+`link keeps lines intact under a BLE-sized MTU cap`).
+
+The robot-side C++ needs no changes: `printf` goes to whichever channel the
+active connection uses, and `LineAssembler` already tolerates arbitrary
+fragmentation.
 
 ---
 

@@ -1,0 +1,50 @@
+# Web Serial and Web Bluetooth both require a secure context. On a Chromebook
+# there is no convenient way to serve localhost (Crostini aside) and file://
+# does not qualify, so the panel is published to GitHub Pages and opened over
+# HTTPS from the Chromebook itself.
+#
+# Enable once under Settings -> Pages -> Source: GitHub Actions.
+name: Deploy control panel to Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['web/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Framing and link tests
+        run: node web/serial-link.test.mjs
+      - name: Robot protocol tests
+        run: make -C robot/test run
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4
