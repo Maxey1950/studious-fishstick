@@ -22,6 +22,7 @@ import {
   withBlocks,
   type ArcadeProject,
 } from '../../shared/arcadeProtocol';
+import { countBlocks } from '../../shared/history';
 import { changedFiles, sharedFiles, withFiles } from '../../shared/projectFiles';
 import { sameBlocks } from '../../shared/sameBlocks';
 import { DEFAULT_SYNC_OPTIONS, SyncState, type SyncOptions } from '../../shared/syncState';
@@ -73,6 +74,14 @@ let reportedApi = false;
 let pollReadOk = true;
 /** The first successful read is snapshotted, to see what the workspace holds. */
 let loggedFirstRead = false;
+/**
+ * Whether the editor has finished loading the document into its workspace.
+ *
+ * Until it has, the workspace is empty or half-built and must never be written
+ * back — that blank would erase the file. Proven by the workspace reaching the
+ * document's block count.
+ */
+let workspaceLoaded = false;
 
 /**
  * Starts the editor, same-origin when asked for.
@@ -188,6 +197,28 @@ function startDirectPolling(): void {
       loggedFirstRead = true;
       console.log(`[blocks] first workspace read (${blocks.length} chars): ${blocks.slice(0, 200)}`);
     }
+
+    // The editor loads the document asynchronously: for a moment after it
+    // starts, its workspace holds only an empty on-start block while the file
+    // already has a whole program. Saving that moment would write the blank
+    // over the file and delete everything — which is exactly what "restarting
+    // deletes my code" was. So nothing is saved until the workspace has caught
+    // up to the document at least once; a block count that reaches the file's
+    // is proof it finished loading.
+    if (!workspaceLoaded) {
+      if (countBlocks(blocks) >= countBlocks(documentBlocks)) {
+        workspaceLoaded = true;
+        agreedBlocks = blocks;
+        lastPolled = blocks;
+      } else {
+        console.log(
+          `[blocks] still loading (${countBlocks(blocks)} of ` +
+            `${countBlocks(documentBlocks)} blocks) — not saving yet`
+        );
+      }
+      return;
+    }
+
     if (!agreedBlocks) {
       // The canvas has just been built from the document, so this reading is
       // what both sides hold — in the spelling every later comparison uses.
@@ -314,9 +345,11 @@ function pump(): void {
  */
 function shareProjectFiles(): void {
   const changed = changedFiles(hostFiles, sharedFiles(project.text));
-  if (!Object.keys(changed).length) {
+  const names = Object.keys(changed);
+  if (!names.length) {
     return;
   }
+  console.log(`[blocks] sharing project files: ${names.join(', ')}`);
   hostFiles = { ...hostFiles, ...changed };
   post({ type: 'projectFiles', files: changed });
 }
@@ -459,6 +492,10 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     case 'projectChanged': {
       const blocks = blocksOf(outcome.project);
+      console.log(
+        `[blocks] editor reported a project change ` +
+          `(files: ${Object.keys(outcome.project.text).join(', ')})`
+      );
 
       // If the editor reports an empty workspace while the file has blocks in
       // it, the editor failed to load the project rather than the user deleting
@@ -515,6 +552,7 @@ function handleHostMessage(message: HostMessage): void {
       };
       highlightRemote = message.highlightRemoteChanges;
       documentBlocks = message.xml;
+      workspaceLoaded = hasNoBlocks(message.xml);
       hostFiles = { ...message.files };
       // Open with the project's real extensions and assets, not a bare shell —
       // otherwise the first save would report them as deleted.
@@ -547,6 +585,9 @@ function handleHostMessage(message: HostMessage): void {
 
     case 'update':
       documentBlocks = message.xml;
+      // A peer replaced the document; the editor is about to rebuild from it, so
+      // hold saving until the workspace reflects the new content.
+      workspaceLoaded = hasNoBlocks(message.xml);
       sync.onRemoteChange(message.xml, Date.now());
       if (sync.hasPendingRemote()) {
         showStatus('A change from someone else will apply when you pause…');

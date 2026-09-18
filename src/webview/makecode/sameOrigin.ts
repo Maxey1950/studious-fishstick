@@ -573,24 +573,74 @@ function findWorkspace(view: any): any {
  */
 function refreshWorkspace(view: any, reach: EditorReach): any {
   const opts = view.__arcadeOpts;
-  const routes: Array<() => any> = [
-    () => opts?.projectView?.blocksEditor?.editor,
-    () => opts?.projectView?.editor?.editor,
-    () => opts?.projectView?.blocksEditor?.workspace,
-    () => view.__arcadeWorkspace,
+  const candidates: Array<[string, () => any]> = [
+    ['opts.blocksEditor.editor', () => opts?.projectView?.blocksEditor?.editor],
+    ['opts.editor.editor', () => opts?.projectView?.editor?.editor],
+    ['opts.blocksEditor.workspace', () => opts?.projectView?.blocksEditor?.workspace],
+    ['__arcadeWorkspace', () => view.__arcadeWorkspace],
+    ['getMainWorkspace', () => view.Blockly?.getMainWorkspace?.()],
+    ['pxt.blocks.getMainWorkspace', () => view.pxt?.blocks?.getMainWorkspace?.()],
   ];
-  for (const route of routes) {
+
+  // The editor keeps more than one workspace — the flyout in the toolbox is one,
+  // a mutator popup another — and after a project is imported the reference we
+  // captured can be left pointing at an empty one while the blocks live in
+  // another. So rather than trusting a fixed route, take the real editing
+  // workspace: not a flyout, not a mutator, and the one actually holding blocks.
+  let best: any;
+  let bestName = 'none';
+  let bestCount = -1;
+  const counts: string[] = [];
+  for (const [name, route] of candidates) {
+    let workspace: any;
     try {
-      const workspace = route();
-      if (isWorkspace(workspace)) {
-        reach.workspace = workspace;
-        return workspace;
-      }
+      workspace = route();
     } catch {
-      // Try the next.
+      continue;
+    }
+    if (!isWorkspace(workspace) || isSecondaryWorkspace(workspace)) {
+      continue;
+    }
+    let count = 0;
+    try {
+      count = workspace.getTopBlocks(false).length;
+    } catch {
+      continue;
+    }
+    counts.push(`${name}=${count}`);
+    // Prefer the workspace with the most top-level blocks. A tie keeps the
+    // earlier, more specific route.
+    if (count > bestCount) {
+      best = workspace;
+      bestName = name;
+      bestCount = count;
     }
   }
+
+  if (!loggedWorkspaces) {
+    loggedWorkspaces = true;
+    console.log(`[blocks] workspaces — ${counts.join(' ') || 'none'} → using ${bestName}`);
+  }
+
+  if (best) {
+    reach.workspace = best;
+    return best;
+  }
   return reach.workspace;
+}
+
+/** A flyout or mutator workspace, which is never the one to save. */
+function isSecondaryWorkspace(workspace: any): boolean {
+  try {
+    return Boolean(
+      workspace.isFlyout ||
+        workspace.isMutator ||
+        workspace.internalIsFlyout ||
+        workspace.internalIsMutator
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -598,6 +648,9 @@ function refreshWorkspace(view: any, reach: EditorReach): any {
  * that it happened — the routes fail for different reasons on different builds.
  */
 let workspaceRoute = 'none';
+
+/** The workspace census is logged once, to see where the blocks actually are. */
+let loggedWorkspaces = false;
 
 /**
  * A workspace is whatever can list its blocks and be driven.

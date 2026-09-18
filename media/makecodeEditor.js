@@ -179,6 +179,11 @@
     };
   }
 
+  // src/shared/history.ts
+  function countBlocks(xml) {
+    return (xml.match(/<block[\s>]/g) ?? []).length;
+  }
+
   // src/shared/sameBlocks.ts
   function sameBlocks(a, b) {
     if (a === b) {
@@ -624,25 +629,62 @@
   }
   function refreshWorkspace(view, reach2) {
     const opts = view.__arcadeOpts;
-    const routes = [
-      () => opts?.projectView?.blocksEditor?.editor,
-      () => opts?.projectView?.editor?.editor,
-      () => opts?.projectView?.blocksEditor?.workspace,
-      () => view.__arcadeWorkspace
+    const candidates = [
+      ["opts.blocksEditor.editor", () => opts?.projectView?.blocksEditor?.editor],
+      ["opts.editor.editor", () => opts?.projectView?.editor?.editor],
+      ["opts.blocksEditor.workspace", () => opts?.projectView?.blocksEditor?.workspace],
+      ["__arcadeWorkspace", () => view.__arcadeWorkspace],
+      ["getMainWorkspace", () => view.Blockly?.getMainWorkspace?.()],
+      ["pxt.blocks.getMainWorkspace", () => view.pxt?.blocks?.getMainWorkspace?.()]
     ];
-    for (const route of routes) {
+    let best;
+    let bestName = "none";
+    let bestCount = -1;
+    const counts = [];
+    for (const [name, route] of candidates) {
+      let workspace;
       try {
-        const workspace = route();
-        if (isWorkspace(workspace)) {
-          reach2.workspace = workspace;
-          return workspace;
-        }
+        workspace = route();
       } catch {
+        continue;
       }
+      if (!isWorkspace(workspace) || isSecondaryWorkspace(workspace)) {
+        continue;
+      }
+      let count = 0;
+      try {
+        count = workspace.getTopBlocks(false).length;
+      } catch {
+        continue;
+      }
+      counts.push(`${name}=${count}`);
+      if (count > bestCount) {
+        best = workspace;
+        bestName = name;
+        bestCount = count;
+      }
+    }
+    if (!loggedWorkspaces) {
+      loggedWorkspaces = true;
+      console.log(`[blocks] workspaces \u2014 ${counts.join(" ") || "none"} \u2192 using ${bestName}`);
+    }
+    if (best) {
+      reach2.workspace = best;
+      return best;
     }
     return reach2.workspace;
   }
+  function isSecondaryWorkspace(workspace) {
+    try {
+      return Boolean(
+        workspace.isFlyout || workspace.isMutator || workspace.internalIsFlyout || workspace.internalIsMutator
+      );
+    } catch {
+      return false;
+    }
+  }
   var workspaceRoute = "none";
+  var loggedWorkspaces = false;
   function isWorkspace(value) {
     try {
       return Boolean(
@@ -1194,6 +1236,7 @@ ${lines.join("\n")}`);
   var reportedApi = false;
   var pollReadOk = true;
   var loggedFirstRead = false;
+  var workspaceLoaded = false;
   async function startEditor(sameOrigin, requireCorp) {
     if (!sameOrigin) {
       loadEditor(ARCADE_EDITOR_URL);
@@ -1266,6 +1309,18 @@ ${lines.join("\n")}`);
         loggedFirstRead = true;
         console.log(`[blocks] first workspace read (${blocks.length} chars): ${blocks.slice(0, 200)}`);
       }
+      if (!workspaceLoaded) {
+        if (countBlocks(blocks) >= countBlocks(documentBlocks)) {
+          workspaceLoaded = true;
+          agreedBlocks = blocks;
+          lastPolled = blocks;
+        } else {
+          console.log(
+            `[blocks] still loading (${countBlocks(blocks)} of ${countBlocks(documentBlocks)} blocks) \u2014 not saving yet`
+          );
+        }
+        return;
+      }
       if (!agreedBlocks) {
         agreedBlocks = blocks;
       }
@@ -1331,9 +1386,11 @@ ${lines.join("\n")}`);
   }
   function shareProjectFiles() {
     const changed = changedFiles(hostFiles, sharedFiles(project.text));
-    if (!Object.keys(changed).length) {
+    const names = Object.keys(changed);
+    if (!names.length) {
       return;
     }
+    console.log(`[blocks] sharing project files: ${names.join(", ")}`);
     hostFiles = { ...hostFiles, ...changed };
     post({ type: "projectFiles", files: changed });
   }
@@ -1410,6 +1467,9 @@ ${lines.join("\n")}`);
         return;
       case "projectChanged": {
         const blocks = blocksOf(outcome.project);
+        console.log(
+          `[blocks] editor reported a project change (files: ${Object.keys(outcome.project.text).join(", ")})`
+        );
         if (Date.now() < settlingUntil) {
           lastPolled = blocks;
           return;
@@ -1447,6 +1507,7 @@ ${lines.join("\n")}`);
         };
         highlightRemote = message.highlightRemoteChanges;
         documentBlocks = message.xml;
+        workspaceLoaded = hasNoBlocks(message.xml);
         hostFiles = { ...message.files };
         project = withFiles(createProject("blocks", message.xml), message.files);
         sync = new SyncState(syncOptions);
@@ -1470,6 +1531,7 @@ ${lines.join("\n")}`);
       }
       case "update":
         documentBlocks = message.xml;
+        workspaceLoaded = hasNoBlocks(message.xml);
         sync.onRemoteChange(message.xml, Date.now());
         if (sync.hasPendingRemote()) {
           showStatus("A change from someone else will apply when you pause\u2026");
