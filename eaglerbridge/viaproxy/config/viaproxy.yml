@@ -1,0 +1,23 @@
+# ViaProxy config placeholder.
+#
+# STRUCTURAL SKELETON ONLY — copy the real key names from the sample
+# `viaproxy.yml` shipped in the ViaProxy release
+# (https://github.com/ViaVersion/ViaProxy/releases) before this is used.
+# Do not deploy this file as-is.
+
+bind-address: "0.0.0.0"
+bind-port: 25568
+
+# The real, offline-mode Java server.
+target-address: "REPLACE_WITH_TARGET_SERVER_HOST:25565"
+target-version: "AUTO_DETECT"
+
+# Client-facing protocol: the Eaglercraft client's native version.
+# UNCONFIRMED — see docs/ARCHITECTURE.md items 1 and 5.
+client-version: "UNCONFIRMED"
+
+# The target server is offline-mode ("cracked"); ViaProxy must pass through
+# the same offline UUID rather than attempting Microsoft account auth.
+# Verify the exact setting name against ViaProxy's current sample config —
+# this has been named differently across releases.
+auth-method: "PASSTHROUGH_OFFLINE"

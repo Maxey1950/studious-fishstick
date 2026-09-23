@@ -1,0 +1,21 @@
+# EaglerXServer-Standalone config placeholder.
+#
+# STRUCTURAL SKELETON ONLY — the real key names/nesting must be copied from
+# the sample config shipped in the EaglerXServer-Standalone release zip
+# (https://github.com/lax1dude/eaglerxserver/releases) before this is used.
+# Do not deploy this file as-is.
+
+[listener]
+# Address/port the browser's wss:// connects to.
+bind_address = "0.0.0.0:8080"
+
+[listener.backend]
+# Points at ViaProxy's bind port, NOT the real target server.
+host = "viaproxy"
+port = 25568
+
+[auth]
+# The target is offline-mode; the gateway must not attempt online-mode
+# session auth on the client's behalf. Verify the actual key name for this
+# in the upstream sample config (see docs/ARCHITECTURE.md item 4).
+online_mode = false

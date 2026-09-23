@@ -1,0 +1,31 @@
+services:
+  gateway:
+    # EaglerXServer-Standalone: terminates the browser wss:// connection and
+    # forwards a plain Minecraft TCP stream to `viaproxy`.
+    # Download EaglerXServer-Standalone.jar from
+    # https://github.com/lax1dude/eaglerxserver/releases into ./gateway/
+    # before starting this service.
+    image: eclipse-temurin:21-jre-jammy
+    working_dir: /app
+    volumes:
+      - ./gateway:/app
+    command: ["java", "-jar", "EaglerXServer-Standalone.jar", "config/velocity.toml"]
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    restart: unless-stopped
+    depends_on:
+      - viaproxy
+
+  viaproxy:
+    # ViaProxy: translates the client's native protocol to whatever the real
+    # target server runs. Download ViaProxy.jar from
+    # https://github.com/ViaVersion/ViaProxy/releases into ./viaproxy/
+    # before starting this service.
+    image: eclipse-temurin:21-jre-jammy
+    working_dir: /app
+    volumes:
+      - ./viaproxy:/app
+    command: ["java", "-jar", "ViaProxy.jar", "cli", "--config", "config/viaproxy.yml"]
+    ports:
+      - "127.0.0.1:${VIAPROXY_BIND_PORT:-25568}:25568"
+    restart: unless-stopped
