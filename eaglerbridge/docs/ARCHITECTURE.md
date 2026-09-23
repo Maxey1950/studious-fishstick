@@ -18,10 +18,16 @@ contradiction earlier in planning (client described as both "1.21.11" and "26.2"
 **Client**: an `EaglercraftX Wasm-GC` build, marketed version `26.2` (`0.6-dev`).
 This is a genuine from-scratch rewrite (WebAssembly-GC, not the old asm.js/applet
 client), targeting native protocol close to real MC `26.2`. Confirmed sibling
-build `EaglercraftX 26.1.2` reports **native protocol 775**. The exact integer
-for a `26.2` build (776, or whatever Mojang assigned) is *not yet confirmed* —
-we only have the hosted page, not its source, so this must be read out of the
-client's own JS/wasm bundle or a matching source repo before it's trusted.
+build `EaglercraftX 26.1.2` reports **native protocol 775**.
+
+The source for this specific `26.2` build isn't available (owner isn't sharing
+it), so the exact protocol integer for `26.2` (776, or whatever Mojang
+assigned — could also just be 775 if this build hasn't bumped past 26.1.2's
+protocol yet) can't be read directly. **Decision: proceed with `775` as the
+configured client protocol**, on the assumption that the 26.1→26.2 delta
+either didn't change the protocol number or is close enough for ViaVersion to
+paper over. This is a working assumption, not a confirmed fact — see the
+failure mode noted in item 1 of §5.
 
 **Target server**: real, offline-mode ("cracked"), version `26.1` or `26.2` —
 i.e. at most a one-drop gap from the client, possibly none. This is a much
@@ -111,9 +117,14 @@ paragraph blindly.
 
 ## 5. Open items before this goes further than config
 
-1. Confirm the exact native protocol integer the `26.2` client speaks (don't
-   assume it's 775 — that's the confirmed number for a *different* build,
-   `26.1.2`).
+1. Protocol integer is set to `775` (EaglercraftX 26.1.2's confirmed number)
+   as a deliberate assumption, since the client's source isn't available.
+   **Failure mode to watch for**: if the real `26.2` client uses a different
+   protocol integer, the handshake will fail cleanly (ViaProxy/the target
+   server will reject or misparse the login packet) rather than silently
+   misbehaving — so this is safe to try, but treat any connection failure
+   at the handshake stage as "check this number first," not a config bug
+   elsewhere. Revisit if/when the source becomes available.
 2. Confirm WebSocket framing against the actual client bundle (section 4).
 3. Validate the EaglerXServer-Standalone TOML schema and the ViaProxy YAML
    schema against the sample configs shipped in their releases — the files in

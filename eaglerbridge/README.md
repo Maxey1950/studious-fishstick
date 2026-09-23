@@ -33,7 +33,9 @@ before running:
 
 ## Known gaps (see docs/ARCHITECTURE.md for detail)
 
-- Exact client protocol integer unconfirmed.
+- Client protocol set to `775` (EaglercraftX 26.1.2's confirmed number) as a
+  working assumption — the actual `26.2` client's source isn't available.
+  If the connection fails at handshake, check this number first.
 - WebSocket framing assumed from ecosystem convention, not verified against
   this specific client's source.
 - Offline-auth passthrough (UUID consistency between gateway and ViaProxy)

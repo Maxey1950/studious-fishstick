@@ -13,8 +13,12 @@ target-address: "REPLACE_WITH_TARGET_SERVER_HOST:25565"
 target-version: "AUTO_DETECT"
 
 # Client-facing protocol: the Eaglercraft client's native version.
-# UNCONFIRMED — see docs/ARCHITECTURE.md items 1 and 5.
-client-version: "UNCONFIRMED"
+# Client source unavailable — set to EaglercraftX 26.1.2's confirmed
+# protocol (775) as a working assumption, not a verified fact.
+# If handshake fails, check this first — see docs/ARCHITECTURE.md §5 item 1.
+# Confirm against ViaProxy's actual accepted value format (protocol integer
+# vs version string like "1.21.11"/"26.1.2") in its current sample config.
+client-version: "775"
 
 # The target server is offline-mode ("cracked"); ViaProxy must pass through
 # the same offline UUID rather than attempting Microsoft account auth.
