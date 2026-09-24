@@ -1,21 +1,44 @@
-# EaglerXServer-Standalone config placeholder.
-#
-# STRUCTURAL SKELETON ONLY — the real key names/nesting must be copied from
-# the sample config shipped in the EaglerXServer-Standalone release zip
-# (https://github.com/lax1dude/eaglerxserver/releases) before this is used.
-# Do not deploy this file as-is.
+# Velocity's OWN proxy config (real schema — confirmed format, this is the
+# actual proxy Velocity uses, not an EaglerXServer-specific file). EaglerXServer
+# is a Velocity PLUGIN, not a replacement proxy: it injects into this proxy's
+# existing listener rather than opening its own port. See
+# ../plugins/EaglerXServer/listeners.cfg for the eagler-specific settings and
+# docs/ARCHITECTURE.md for why the split is this way.
 
-[listener]
-# Address/port the browser's wss:// connects to.
-bind_address = "0.0.0.0:8080"
+config-version = "2.7"
 
-[listener.backend]
-# Points at ViaProxy's bind port, NOT the real target server.
-host = "viaproxy"
-port = 25568
+# The single port both Eaglercraft (wss:// upgrade) and any vanilla TCP
+# clients connect to — EaglerXServer multiplexes both on this same port by
+# sniffing the first bytes of each connection (HTTP upgrade vs raw MC
+# handshake). There is no separate "gateway port" to configure.
+bind = "0.0.0.0:8080"
 
-[auth]
-# The target is offline-mode; the gateway must not attempt online-mode
-# session auth on the client's behalf. Verify the actual key name for this
-# in the upstream sample config (see docs/ARCHITECTURE.md item 4).
-online_mode = false
+motd = "Eaglercraft bridge"
+show-max-players = 100
+
+# Eaglercraft clients are not real Mojang accounts — Velocity must not try to
+# authenticate them against Mojang's session servers.
+online-mode = false
+
+# ViaProxy does not speak Velocity's modern forwarding handshake, so don't
+# send it one. This means the real target server won't see the player's real
+# IP via Velocity forwarding — a lesser concern than breaking the connection.
+player-info-forwarding-mode = "none"
+
+[servers]
+# Points at ViaProxy's bind port, NOT the real target server — ViaProxy is
+# the one that dials out to the real server. See ../../viaproxy/config/viaproxy.yml.
+viaproxy = "127.0.0.1:25568"
+try = ["viaproxy"]
+
+[forced-hosts]
+
+[advanced]
+compression-threshold = 256
+compression-level = -1
+login-ratelimit = 3000
+connection-timeout = 5000
+read-timeout = 30000
+
+[query]
+enabled = false

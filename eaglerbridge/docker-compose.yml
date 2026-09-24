@@ -1,15 +1,18 @@
 services:
   gateway:
-    # EaglerXServer-Standalone: terminates the browser wss:// connection and
-    # forwards a plain Minecraft TCP stream to `viaproxy`.
-    # Download EaglerXServer-Standalone.jar from
-    # https://github.com/lax1dude/eaglerxserver/releases into ./gateway/
-    # before starting this service.
+    # Velocity proxy + the EaglerXServer plugin. There is no standalone
+    # EaglerXServer artifact (confirmed against the v1.1.1 release assets) —
+    # EaglerXServer.jar is a plugin that must run inside a real Velocity (or
+    # BungeeCord/Spigot) install and injects into ITS listener rather than
+    # opening its own port. Before starting:
+    #   - download velocity.jar (PaperMC Velocity) into ./gateway/
+    #   - download EaglerXServer.jar (https://github.com/lax1dude/eaglerxserver/releases)
+    #     into ./gateway/plugins/
     image: eclipse-temurin:21-jre-jammy
     working_dir: /app
     volumes:
       - ./gateway:/app
-    command: ["java", "-jar", "EaglerXServer-Standalone.jar", "config/velocity.toml"]
+    command: ["java", "-jar", "velocity.jar"]
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
     restart: unless-stopped
@@ -17,15 +20,15 @@ services:
       - viaproxy
 
   viaproxy:
-    # ViaProxy: translates the client's native protocol to whatever the real
-    # target server runs. Download ViaProxy.jar from
-    # https://github.com/ViaVersion/ViaProxy/releases into ./viaproxy/
-    # before starting this service.
-    image: eclipse-temurin:21-jre-jammy
-    working_dir: /app
+    # Official ViaProxy image (confirmed from upstream README) — translates
+    # the client's native protocol to whatever the real target server runs.
+    # First run: generate ./viaproxy/run/viaproxy.yml per ViaProxy's own
+    # "Usage for Server owners (Config)" instructions before relying on this
+    # service; ./viaproxy/viaproxy.yml.reference here is a reference of which
+    # keys to edit afterward, not something to drop in as a complete config.
+    image: ghcr.io/viaversion/viaproxy:latest
     volumes:
-      - ./viaproxy:/app
-    command: ["java", "-jar", "ViaProxy.jar", "cli", "--config", "config/viaproxy.yml"]
+      - ./viaproxy/run:/app/run
     ports:
       - "127.0.0.1:${VIAPROXY_BIND_PORT:-25568}:25568"
     restart: unless-stopped

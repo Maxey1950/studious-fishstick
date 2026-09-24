@@ -1,0 +1,29 @@
+# EaglerXServer's own config (Velocity uses the .toml variant of the
+# generated /settings.cfg schema documented at
+# https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md).
+# This is a hand-built skeleton of the keys that matter for this bridge —
+# EaglerXServer normally generates the FULL file with every key and comments
+# on first run; let it generate the real file, then only change what's below,
+# rather than replacing the generated file with this skeleton wholesale.
+
+[protocols]
+# CRITICAL, high-risk value: EaglerXServer 1.1.1 defaults this to 340
+# (MC 1.12.2). Our client is a WASM-GC 26.2 build needing protocol ~775-776.
+# Raising this number is a permission gate ("clients reporting a protocol
+# above this are rejected at handshake"), NOT proof that the plugin's
+# packet-handling code actually understands modern (1.20.2+ Configuration
+# state, 1.20.5+ cookies/transfer) login flow — that logic may simply not
+# exist in this plugin version. Treat connecting successfully past the
+# handshake as the first real test of this whole architecture, not a
+# formality. See docs/ARCHITECTURE.md "New risk" section.
+max_minecraft_protocol = 775
+min_minecraft_protocol = 3
+
+# Unrelated to the above: these protocol_vN flags gate the Eaglercraft
+# WEBSOCKET WRAPPER protocol version (the framing/handshake EaglerXServer
+# itself defines, v1-v5) — NOT the Minecraft protocol number. Don't confuse
+# the two axes. Left at their defaults (all allowed).
+protocol_legacy_allowed = true
+protocol_v3_allowed = true
+protocol_v4_allowed = true
+protocol_v5_allowed = true

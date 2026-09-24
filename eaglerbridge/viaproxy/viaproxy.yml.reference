@@ -1,0 +1,19 @@
+# IMPORTANT: ViaProxy generates its real viaproxy.yml on first run
+# (`java -jar ViaProxy.jar config viaproxy.yml`) with every key and inline
+# comments — this file is NOT meant to be hand-authored from scratch, and
+# ViaProxy's exact key set/format wasn't independently verified here (only
+# target-address and bind-port are corroborated across multiple sources).
+#
+# Workflow: run the generate step once, THEN edit only the keys below in the
+# real generated file. Don't just drop this skeleton in place of it.
+
+bind-port: 25568
+
+# The real, offline-mode Java server.
+target-address: "REPLACE_WITH_TARGET_SERVER_HOST:25565"
+
+# Client-facing protocol: matches gateway/plugins/EaglerXServer/settings.toml's
+# max_minecraft_protocol (775) — EaglercraftX 26.1.2's confirmed protocol,
+# used as a stand-in per your direction since the actual 26.2 client's
+# source isn't available. If the connection fails at handshake, check this
+# number first — see docs/ARCHITECTURE.md §5 item 1.

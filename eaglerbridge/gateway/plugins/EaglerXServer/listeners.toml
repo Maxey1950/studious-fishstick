@@ -1,0 +1,17 @@
+# EaglerXServer's per-listener config (Velocity variant of /listeners.cfg,
+# see https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md).
+# Skeleton of the keys that matter here — let EaglerXServer generate the
+# real file on first run and merge these in, rather than replacing it.
+
+[[listener_list]]
+listener_name = "default"
+
+# Must match Velocity's own `bind` address in ../../config/velocity.toml —
+# EaglerXServer injects into that existing listener rather than opening its
+# own port. If these two values ever diverge, EaglerXServer's docs say the
+# listener entry silently does nothing.
+inject_address = "0.0.0.0:8080"
+
+# Accept both the Eaglercraft wss:// upgrade and plain Minecraft TCP on the
+# same port; connection type is sniffed from the first bytes.
+dual_stack = true

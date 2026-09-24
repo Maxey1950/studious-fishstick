@@ -115,6 +115,63 @@ the WebSocket send/receive path to confirm frame boundaries and any
 handshake preamble before wiring the gateway config — don't trust this
 paragraph blindly.
 
+## 5a. Corrections from reading the real EaglerXServer config reference
+
+The rest of this document was written before pulling EaglerXServer's actual
+generated config reference
+([`CONFIG.md`](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md),
+derived from its v1.1.1 source) and ViaProxy's real README. Several
+assumptions above turned out wrong; corrections:
+
+- **There is no `EaglerXServer-Standalone.jar`.** Confirmed against the
+  v1.1.1 release assets: the only artifact is a single universal
+  `EaglerXServer.jar` plugin for Spigot/BungeeCord/Velocity. It has to run
+  *inside* a real Velocity (or BungeeCord/Spigot) process — the scaffold now
+  runs actual Velocity with EaglerXServer as a plugin, not a fictitious
+  standalone gateway binary.
+- **EaglerXServer has no backend/target-address config of its own, and no
+  separate listen port.** It injects into the *host proxy's own existing
+  listener* (`inject_address`, defaulting to Velocity's own bind address)
+  and multiplexes Eaglercraft WebSocket + plain Minecraft TCP on that single
+  port by sniffing the first bytes of each connection. Routing to a backend
+  is entirely Velocity's own job (`[servers]` / `try` in Velocity's real
+  `velocity.toml`) — EaglerXServer doesn't participate in that decision at
+  all. The earlier scaffold's `[listener.backend]` block was fabricated and
+  has been removed.
+- **Two separate "protocol version" axes exist in EaglerXServer's config —
+  don't conflate them**: `protocol_v1`..`v5`/`protocol_legacy_allowed` gate
+  the *Eaglercraft WebSocket wrapper's own* handshake/framing version
+  (a small versioning scheme EaglerXServer itself defines); separately,
+  `min_minecraft_protocol`/`max_minecraft_protocol` gate the actual embedded
+  Minecraft protocol integer. Our "775 vs 776" question is about the latter.
+- **New, significant risk: `max_minecraft_protocol` defaults to 340
+  (MC 1.12.2)** in EaglerXServer 1.1.1. This must be raised to accept a
+  775-class client (done in the scaffold's `settings.toml`), but raising a
+  config number is only a permission gate — it says nothing about whether
+  the plugin's actual packet-handling code understands modern login-flow
+  changes introduced well after 1.12.2 (the 1.20.2+ "Configuration" state,
+  1.20.5+ cookies/transfer packets, etc.). This has **not been verified** to
+  actually work; treat successfully connecting past the handshake as the
+  first real test of this whole architecture, not a formality.
+- **EaglerXPaper remains Paper-plugin-only** (confirmed: "Deployment mode:
+  Plugin-only... shares the main server port"). There is still no confirmed
+  gateway component with native 26.x support for a "front of network, don't
+  own the destination server" topology other than plain EaglerXServer with
+  its protocol cap manually raised (previous point) — EaglerXPaper only
+  helps if you run the destination Paper server yourself.
+- **ViaProxy's real README confirms wider support than assumed earlier**:
+  both server and client version lists explicitly say "Release (1.0.0/1.7.2
+  - 26.3)" — so upstream ViaProxy itself, not just the radmanplays fork, is
+  confirmed current for this entire version range in both directions.
+- **ViaProxy ships an official Docker image**
+  (`ghcr.io/viaversion/viaproxy:latest`, confirmed from its README) with a
+  documented one-line run command — the scaffold now uses that instead of a
+  hand-guessed jar invocation. Its config (`viaproxy.yml` plus a `ViaLoader/`
+  folder with `viaversion.yml`/`viabackwards.yml`/etc.) is **generated on
+  first run**, not something to author from scratch — `viaproxy.yml.reference`
+  in this scaffold is a list of which keys to change afterward, not a
+  drop-in file.
+
 ## 5. Open items before this goes further than config
 
 1. Protocol integer is set to `775` (EaglercraftX 26.1.2's confirmed number)
@@ -126,15 +183,27 @@ paragraph blindly.
    at the handshake stage as "check this number first," not a config bug
    elsewhere. Revisit if/when the source becomes available.
 2. Confirm WebSocket framing against the actual client bundle (section 4).
-3. Validate the EaglerXServer-Standalone TOML schema and the ViaProxy YAML
-   schema against the sample configs shipped in their releases — the files in
-   `gateway/config/` and `viaproxy/config/` in this scaffold are structural
-   placeholders, not verified-correct configs.
-4. Decide on the offline-auth handshake details: EaglerXServer needs to be
-   told not to attempt online-mode auth, and ViaProxy's join mode needs to
-   pass through the same offline UUID rather than trying Microsoft auth,
-   so the UUID the real server sees matches what the client presents.
-5. Confirm whether ViaProxy's 26.x support needs a newer JRE than the
-   containers below assume (EaglerXPaper's docs note Java 25+ for Paper
-   26.x — ViaProxy's own JRE requirement for the same protocol range should
-   be checked against its release notes).
+3. `gateway/plugins/EaglerXServer/*.toml` are skeletons of the *real*
+   documented keys (§5a) but not the full generated file — let EaglerXServer
+   generate the complete file on first run and merge these values in, rather
+   than replacing it outright. `viaproxy/viaproxy.yml.reference` is the same
+   situation, more so, since ViaProxy's schema wasn't independently verified
+   beyond `target-address`/`bind-port` — generate first, then edit.
+4. **New, unverified, and the biggest real risk (§5a)**: does EaglerXServer
+   1.1.1 actually handle a 775-class client's login sequence correctly once
+   `max_minecraft_protocol` is raised, or does it only understand protocol
+   *numbers* up to that value while still assuming pre-1.20.2 packet flow
+   internally? This can only be answered by actually trying the connection.
+5. Offline-auth handshake: Velocity's own `online-mode = false` is set in
+   `gateway/config/velocity.toml` (confirmed real Velocity key), so Velocity
+   won't try Mojang auth on the incoming Eaglercraft connection. Still
+   unconfirmed: ViaProxy's own join-mode setting for passing the same
+   offline UUID through to the real target server rather than attempting
+   Microsoft account auth — generate ViaProxy's config and check its actual
+   auth-related keys (item 3) before relying on this.
+6. Confirm whether ViaProxy's 26.x support needs a newer JRE than the
+   `eclipse-temurin:21-jre-jammy` the gateway container assumes (EaglerXPaper's
+   docs note Java 25+ for Paper 26.x — ViaProxy's own JRE requirement for the
+   same protocol range wasn't checked here; its official Docker image sidesteps
+   this for ViaProxy itself, but the gateway/Velocity side still needs it
+   verified).
