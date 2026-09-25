@@ -32,13 +32,21 @@ use crate::access::{requires_edge, AccessIntent, AccessKey, BackingId};
 use crate::identity::{ChannelId, IngressOrdinal};
 use std::collections::HashMap;
 
+/// Retired entries the graph tolerates before it compacts on its own.
+///
+/// Compaction is also due whenever the dead outnumber the live, so its cost —
+/// linear in what the graph holds — is at most a constant per retired entry,
+/// and what `admit` scans stays proportional to what is live. The floor keeps
+/// a small graph from compacting on every admission.
+const COMPACT_AT_DEAD: usize = 256;
+
 /// One live access, and the transaction that declared it.
 #[derive(Clone, Copy, Debug)]
 struct Entry {
     ordinal: IngressOrdinal,
     intent: AccessIntent,
     /// Cleared when the transaction retires. The slot stays so the indices
-    /// pointing at it stay valid; compaction is [`DependencyGraph::compact`].
+    /// pointing at it stay valid until the next [`DependencyGraph::compact`].
     live: bool,
 }
 
@@ -68,10 +76,12 @@ pub struct Census {
 
 /// The live hazard state.
 ///
-/// Holds only accesses whose transactions have not retired. Retiring is the
-/// caller's obligation and is what keeps this bounded; nothing here evicts on
-/// its own, because an eviction would silently drop an edge a later
-/// transaction was owed.
+/// Answers only for accesses whose transactions have not retired. Retiring is
+/// the caller's obligation and is what keeps this bounded; nothing here evicts
+/// a live access, because an eviction would silently drop an edge a later
+/// transaction was owed. Retired entries are reclaimed here, by `admit`, once
+/// they are worth reclaiming — a caller that only retires must not be left
+/// holding a graph whose admission cost grows with its history.
 #[derive(Debug, Default)]
 pub struct DependencyGraph {
     entries: Vec<Entry>,
@@ -84,6 +94,13 @@ pub struct DependencyGraph {
     by_domain: HashMap<ChannelId, Vec<usize>>,
     domain_only: HashMap<ChannelId, Vec<usize>>,
     by_ordinal: HashMap<IngressOrdinal, Vec<usize>>,
+    /// Entries marked retired and not yet compacted away. Counted at
+    /// retirement so deciding whether to compact is not itself a scan.
+    dead: usize,
+    /// The newest ordinal admitted. Kept apart from `entries` because
+    /// compaction may drop the entry that carried it, and the ingress-order
+    /// contract is about everything ever admitted, not about what is live.
+    newest: Option<IngressOrdinal>,
     census: Census,
     /// Buffers `admit` refills instead of allocating.
     ///
@@ -97,7 +114,12 @@ pub struct DependencyGraph {
     /// signature owns.
     scratch: Vec<usize>,
     waits: Vec<IngressOrdinal>,
+    /// Old entry index to new, refilled by `compact`, for the same reason.
+    remap: Vec<usize>,
 }
+
+/// A `remap` slot whose entry did not survive compaction.
+const DROPPED: usize = usize::MAX;
 
 impl DependencyGraph {
     #[must_use]
@@ -112,8 +134,8 @@ impl DependencyGraph {
 
     /// Live accesses, for a test or a report. Not a bound anything enforces.
     #[must_use]
-    pub fn live_accesses(&self) -> usize {
-        self.entries.iter().filter(|e| e.live).count()
+    pub const fn live_accesses(&self) -> usize {
+        self.entries.len() - self.dead
     }
 
     /// Admit one transaction's accesses and return the ordinals it must wait
@@ -136,11 +158,16 @@ impl DependencyGraph {
         accesses: &[AccessIntent],
     ) -> Vec<IngressOrdinal> {
         assert!(
-            self.entries
-                .last()
-                .is_none_or(|last| ordinal > last.ordinal),
+            self.newest.is_none_or(|newest| ordinal > newest),
             "transactions are admitted in ingress order; {ordinal:?} arrived after a later one"
         );
+        if !accesses.is_empty() {
+            self.newest = Some(ordinal);
+        }
+        // Before gathering, so this admission already scans the smaller graph.
+        if self.dead >= COMPACT_AT_DEAD && self.dead >= self.live_accesses() {
+            self.compact();
+        }
         // Taken out so the gathering below can borrow the indexes; put back
         // before returning, so the next admission finds the capacity this one
         // grew. Both are cleared here rather than at the end, because a
@@ -260,33 +287,66 @@ impl DependencyGraph {
     /// creating edges when the work that declared it has finished, and a caller
     /// that retires early publishes a hazard it still owes.
     pub fn retire(&mut self, ordinal: IngressOrdinal) {
-        for &idx in self.by_ordinal.get(&ordinal).into_iter().flatten() {
-            self.entries[idx].live = false;
+        // Removing the bucket is what makes a second retirement of the same
+        // ordinal a no-op, so each entry is counted dead exactly once.
+        if let Some(indices) = self.by_ordinal.remove(&ordinal) {
+            for &idx in &indices {
+                self.entries[idx].live = false;
+            }
+            self.dead += indices.len();
         }
-        self.by_ordinal.remove(&ordinal);
     }
 
-    /// Drop retired entries and rebuild the indexes.
+    /// Drop retired entries and renumber the indexes in place.
     ///
-    /// Separate from [`Self::retire`] because retirement is on the completion
-    /// path and this is not: an index rebuild in a completion handler is work
-    /// charged to the thing that finished rather than to the thing that grew.
+    /// `admit` calls this once retired entries outnumber live ones, so a
+    /// caller never has to; calling it earlier only reclaims sooner. It is not
+    /// run from [`Self::retire`] because retirement is on the completion path:
+    /// an index rebuild in a completion handler is work charged to the thing
+    /// that finished rather than to the thing that grew.
+    ///
+    /// In place rather than rebuilt, because it now runs inside `admit` and
+    /// must keep that path out of the allocator: each index keeps the buckets
+    /// that still hold something, with their capacity, and only buckets left
+    /// empty are released — a backing that is gone must not keep a key.
     pub fn compact(&mut self) {
-        let live: Vec<_> = self.entries.iter().copied().filter(|e| e.live).collect();
-        self.entries.clear();
-        self.by_backing.clear();
-        self.by_heap.clear();
-        self.by_domain.clear();
-        self.domain_only.clear();
-        self.by_ordinal.clear();
-        // The census is a running total across the graph's life and is not
-        // rebuilt: compaction is bookkeeping, and it did not admit anything.
-        let saved = self.census;
-        for e in live {
-            self.insert(e.ordinal, e.intent);
+        if self.dead == 0 {
+            return;
         }
-        self.census = saved;
+        let mut remap = std::mem::take(&mut self.remap);
+        remap.clear();
+        let mut next = 0;
+        for entry in &self.entries {
+            if entry.live {
+                remap.push(next);
+                next += 1;
+            } else {
+                remap.push(DROPPED);
+            }
+        }
+        self.entries.retain(|e| e.live);
+        reindex(&mut self.by_backing, &remap);
+        reindex(&mut self.by_heap, &remap);
+        reindex(&mut self.by_domain, &remap);
+        reindex(&mut self.domain_only, &remap);
+        reindex(&mut self.by_ordinal, &remap);
+        // The census is a running total across the graph's life and is not
+        // touched: compaction is bookkeeping, and it did not admit anything.
+        self.dead = 0;
+        self.remap = remap;
     }
+}
+
+/// Rewrite one index's entry numbers after compaction, dropping the ones that
+/// did not survive and the buckets left with nothing.
+fn reindex<K>(index: &mut HashMap<K, Vec<usize>>, remap: &[usize]) {
+    index.retain(|_, bucket| {
+        bucket.retain_mut(|idx| {
+            *idx = remap[*idx];
+            *idx != DROPPED
+        });
+        !bucket.is_empty()
+    });
 }
 
 #[cfg(test)]
@@ -650,6 +710,70 @@ mod tests {
         let c = g.census();
         assert_eq!(c.edges, 1);
         assert_eq!(c.edges_from_unknown_mode, 1, "and one edge bought with it");
+    }
+
+    /// **A caller that only retires still holds a bounded graph.**
+    ///
+    /// Nothing on the product path calls [`DependencyGraph::compact`], so the
+    /// graph used to keep every retired entry and every index reference to it
+    /// for the life of the session. `admit` gathers those references before it
+    /// discards the dead ones, so its cost grew with history while the live set
+    /// stayed the same size: a measured 0x37 workload spent ~99.8 % of every
+    /// admission skipping tombstones, 7.2 ms per admit, and presented at 7 Hz
+    /// instead of 50.
+    ///
+    /// So the bound is asserted on what `admit` would scan — the entries and
+    /// every index bucket — over a history far longer than the live window, and
+    /// every answer is checked against an all-pairs scan of the live accesses
+    /// so that compaction the caller never asked for cannot change an edge.
+    #[test]
+    fn retired_history_does_not_grow_what_admission_scans() {
+        let mut g = DependencyGraph::new();
+        let mut rng = Rng::new(87);
+        let mut live: Vec<(IngressOrdinal, AccessIntent)> = Vec::new();
+        let mut high_water = 0usize;
+        for n in 0..20_000u64 {
+            let at = ord(n);
+            let intents: Vec<AccessIntent> = (0..rng.below(3) + 1)
+                .map(|_| some_intent(&mut rng))
+                .collect();
+            let mut expected: BTreeSet<IngressOrdinal> = BTreeSet::new();
+            for intent in &intents {
+                for (o, other) in &live {
+                    if *o != at && requires_edge(other, intent) {
+                        expected.insert(*o);
+                    }
+                }
+                live.push((at, *intent));
+            }
+            assert_eq!(
+                g.admit(at, &intents),
+                expected.into_iter().collect::<Vec<_>>(),
+                "waits for {at:?}"
+            );
+            // A window of eight transactions in flight.
+            if n >= 8 {
+                let retired = ord(n - 8);
+                g.retire(retired);
+                live.retain(|(o, _)| *o != retired);
+            }
+            assert_eq!(g.live_accesses(), live.len());
+
+            let indexed: usize = g.by_backing.values().map(Vec::len).sum::<usize>()
+                + g.by_heap.values().map(Vec::len).sum::<usize>()
+                + g.by_domain.values().map(Vec::len).sum::<usize>()
+                + g.domain_only.values().map(Vec::len).sum::<usize>()
+                + g.by_ordinal.values().map(Vec::len).sum::<usize>();
+            high_water = high_water.max(g.entries.len()).max(indexed);
+        }
+        // Live is at most 24 accesses. What is scanned may carry tombstones up
+        // to the compaction threshold, and never history.
+        let bound = 4 * (COMPACT_AT_DEAD + 24);
+        assert!(
+            high_water <= bound,
+            "{high_water} slots held for at most 24 live accesses (bound {bound})"
+        );
+        assert!(g.census().accesses > 30_000, "non-vacuity");
     }
 
     struct Rng(u64);
