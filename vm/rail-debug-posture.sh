@@ -21,6 +21,7 @@
 #   vm/rail-debug-posture.sh --rail macos-14 --label 2026-08-09-serial-debug
 #   vm/rail-debug-posture.sh --rail macos-15 --dry-run
 #   vm/rail-debug-posture.sh --rail macos-13 --kernel-only
+#   vm/rail-debug-posture.sh --rail macos-13 --kernel-only --autoboot
 #
 # It never edits a snapshot in place. Snapshot directories are read-only by
 # contract — `vm/boot-x86.sh` reflink-clones whichever one `current` names and
@@ -62,6 +63,14 @@
 # XNU, so before the device under test had run at all. When the question is
 # "what did the kernel say before it panicked", OpenCore's log is not the
 # evidence, and paying for it can hide the panic that is.
+#
+# `--autoboot` removes the picker from an unattended batch. `ShowPicker=false`
+# boots the default entry without drawing the menu, and `HideAuxiliary=true`
+# takes Recovery, Reset NVRAM and the tools out of the candidate set, so on an
+# OSX-KVM rail the entry left to be the default is the installed volume. A
+# picker that waits — or a timeout that counts down onto the wrong entry — is a
+# `--testing` boot that spends its whole budget at the menu and then reads as a
+# wedge verdict (124) about a device that never ran.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -72,6 +81,7 @@ FROM=""
 LABEL=""
 DRY_RUN=0
 KERNEL_ONLY=0
+AUTOBOOT=0
 
 die() { echo "rail-debug-posture: $*" >&2; exit 1; }
 say() { echo "rail-debug-posture: $*"; }
@@ -86,6 +96,7 @@ while [ $# -gt 0 ]; do
     --label=*) LABEL="${1#--label=}"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --kernel-only) KERNEL_ONLY=1; shift ;;
+    --autoboot) AUTOBOOT=1; shift ;;
     -h|--help) sed -n '2,60p' "$0"; exit 0 ;;
     *) die "unknown arg: $1" ;;
   esac
@@ -160,11 +171,12 @@ mcopy -i "$WORK/esp.img" ::/EFI/OC/config.plist "$WORK/config.plist" \
   || die "no EFI/OC/config.plist in this image"
 
 # --- Edit the plist ---------------------------------------------------------
-python3 - "$WORK/config.plist" "$WORK/config.new.plist" "$DRY_RUN" "$KERNEL_ONLY" <<'PY'
+python3 - "$WORK/config.plist" "$WORK/config.new.plist" "$DRY_RUN" "$KERNEL_ONLY" "$AUTOBOOT" <<'PY'
 import plistlib, sys
 
 src, dst, dry = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 kernel_only = sys.argv[4] == "1"
+autoboot = sys.argv[5] == "1"
 with open(src, "rb") as f:
     cfg = plistlib.load(f)
 
@@ -200,6 +212,9 @@ if not kernel_only:
     setpath(cfg, ["Misc", "Debug", "DisableWatchDog"], True)
     setpath(cfg, ["Misc", "Serial", "Init"], True)
 setpath(cfg, ["Misc", "Boot", "Timeout"], 5)
+if autoboot:
+    setpath(cfg, ["Misc", "Boot", "ShowPicker"], False)
+    setpath(cfg, ["Misc", "Boot", "HideAuxiliary"], True)
 
 # boot-args is a single space-separated string, and it belongs to the guest as
 # much as to us — it can carry csr-active-config-adjacent tuning, vti=, tlbto_us=
@@ -298,11 +313,18 @@ dd if="$WORK/verify.raw" of="$WORK/verify-esp.img" bs=1M skip=$((PART_OFF / 1048
    count=$(( (PART_LEN + 1048575) / 1048576 )) status=none
 mcopy -i "$WORK/verify-esp.img" ::/EFI/OC/config.plist "$WORK/verify.plist" \
   || die "the rebuilt image has no EFI/OC/config.plist — not repointing current"
-python3 - "$WORK/verify.plist" "$KERNEL_ONLY" <<'PY'
+python3 - "$WORK/verify.plist" "$KERNEL_ONLY" "$AUTOBOOT" <<'PY'
 import plistlib, sys
 with open(sys.argv[1], "rb") as f:
     cfg = plistlib.load(f)
 kernel_only = sys.argv[2] == "1"
+autoboot = sys.argv[3] == "1"
+if autoboot:
+    boot = cfg["Misc"]["Boot"]
+    if boot.get("ShowPicker") is not False or boot.get("HideAuxiliary") is not True:
+        sys.exit("rail-debug-posture: read-back mismatch (ShowPicker=%r HideAuxiliary=%r)"
+                 % (boot.get("ShowPicker"), boot.get("HideAuxiliary")))
+    print("  verified ShowPicker=False HideAuxiliary=True")
 target = cfg["Misc"]["Debug"]["Target"]
 serial = cfg["Misc"]["Serial"]["Init"]
 timeout = cfg["Misc"]["Boot"]["Timeout"]
