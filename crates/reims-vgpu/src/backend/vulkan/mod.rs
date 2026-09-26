@@ -346,6 +346,10 @@ impl Backend for VulkanBackend {
         engine::guest_writes_reaching(pages)
     }
 
+    fn guest_write_reach_sources(&self, pages: &[u64]) -> String {
+        engine::guest_write_reach_sources(pages)
+    }
+
     fn retire_guest_import(&self, import: ImportId) -> Option<(usize, usize)> {
         engine::retire_guest_import(import)
     }

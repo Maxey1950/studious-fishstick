@@ -399,6 +399,13 @@ pub(crate) trait Backend: Copy {
         GuestWriteReach::Disjoint
     }
 
+    /// Which of this rail's writers the outstanding writes over `pages` belong
+    /// to, as `name:count` pairs, for a report. Diagnostic only: nothing may
+    /// decide on it. A rail that records no guest-page writes names none.
+    fn guest_write_reach_sources(&self, _pages: &[u64]) -> String {
+        "none".to_owned()
+    }
+
     /// Give up the rail's alias of a retired guest import.
     ///
     /// Returns the `(ptr, len)` host view the rail released, if it held one.
@@ -1520,6 +1527,15 @@ impl Backend for SelectedBackend {
             Self::Metal(b) => b.guest_writes_reaching(pages),
             #[cfg(feature = "backend-vulkan")]
             Self::Vulkan(b) => b.guest_writes_reaching(pages),
+        }
+    }
+
+    fn guest_write_reach_sources(&self, pages: &[u64]) -> String {
+        match self {
+            #[cfg(feature = "backend-metal")]
+            Self::Metal(b) => b.guest_write_reach_sources(pages),
+            #[cfg(feature = "backend-vulkan")]
+            Self::Vulkan(b) => b.guest_write_reach_sources(pages),
         }
     }
 

@@ -1575,6 +1575,7 @@ pub(super) static GUEST_READ_DEBT: std::sync::atomic::AtomicBool =
 static GUEST_WRITE_PAGES: std::sync::Mutex<GuestWriteFootprint> =
     std::sync::Mutex::new(GuestWriteFootprint {
         armed: Vec::new(),
+        armed_sources: Vec::new(),
         allocations: Vec::new(),
     });
 
@@ -1596,6 +1597,10 @@ struct GuestWriteFootprint {
     /// ledger — a poisoned mutex — already answers `Unnamed` at every ask
     /// without one.
     armed: Vec<Vec<u64>>,
+    /// What each [`Self::armed`] entry copies from, index for index — so a
+    /// reader that finds an outstanding write over its pages can say which rail
+    /// recorded it. `"merged"` once the entry cap has folded arms together.
+    armed_sources: Vec<&'static str>,
     /// Resource-owned allocation footprints. A repeated Store into the same
     /// admitted resident retains one immutable identity here rather than
     /// copying and sorting its full page list again. These need no artificial
@@ -1610,10 +1615,17 @@ struct GuestWriteFootprint {
 /// already write. See [`crate::backend::GuestWriteReach`].
 pub use crate::backend::GuestWriteReach;
 
-/// Record the guest pages a writeback about to be submitted will land in.
+/// [`arm_guest_write_pages_from`] with no rail named, for the ledger's own tests.
+#[cfg(test)]
+fn arm_guest_write_pages(pages: &[u64]) {
+    arm_guest_write_pages_from(pages, "unlabelled");
+}
+
+/// Record the guest pages a writeback about to be submitted will land in, and
+/// which rail recorded it.
 ///
 /// Called under the engine lock, beside the [`GUEST_WRITE_DEBT`] publish.
-fn arm_guest_write_pages(pages: &[u64]) {
+fn arm_guest_write_pages_from(pages: &[u64], source: &'static str) {
     let Ok(mut f) = GUEST_WRITE_PAGES.lock() else {
         // A poisoned lock means nothing is recorded, and it stays poisoned, so
         // `guest_writes_reaching` answers `Unnamed` for the rest of the boot.
@@ -1632,11 +1644,15 @@ fn arm_guest_write_pages(pages: &[u64]) {
             oldest.extend_from_slice(&sorted);
             oldest.sort_unstable();
             oldest.dedup();
+            if let Some(tag) = f.armed_sources.first_mut() {
+                *tag = "merged";
+            }
             crate::runtime::drain::note_store_route("gwdebt_merged");
             return;
         }
     }
     f.armed.push(sorted);
+    f.armed_sources.push(source);
 }
 
 /// Record one resource-owned allocation that an outstanding GPU Store writes.
@@ -1659,8 +1675,44 @@ fn arm_guest_write_footprint(footprint: &crate::runtime::guest_ram::GuestPageFoo
 fn clear_guest_write_pages() {
     if let Ok(mut f) = GUEST_WRITE_PAGES.lock() {
         f.armed.clear();
+        f.armed_sources.clear();
         f.allocations.clear();
     }
+}
+
+/// Which rails' outstanding writes reach `pages`, as `name:count` pairs.
+///
+/// The diagnostic twin of [`guest_writes_reaching`]: that one answers whether
+/// to wait, this one says whose write it would be waiting for. Copies name the
+/// source they copy from; a resource-owned allocation is a render target whose
+/// memory *is* the guest's pages, drawn into directly through the import.
+pub fn guest_write_reach_sources(pages: &[u64]) -> String {
+    let Ok(f) = GUEST_WRITE_PAGES.lock() else {
+        return "ledger_poisoned".to_owned();
+    };
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    let mut bump = |name: &'static str| match counts.iter_mut().find(|(n, _)| *n == name) {
+        Some((_, c)) => *c += 1,
+        None => counts.push((name, 1)),
+    };
+    for (i, armed) in f.armed.iter().enumerate() {
+        if pages.iter().any(|p| armed.binary_search(p).is_ok()) {
+            bump(f.armed_sources.get(i).copied().unwrap_or("unlabelled"));
+        }
+    }
+    for allocation in &f.allocations {
+        if pages.iter().any(|p| allocation.contains_page(*p)) {
+            bump("guest_backed_target");
+        }
+    }
+    if counts.is_empty() {
+        return "none".to_owned();
+    }
+    counts
+        .iter()
+        .map(|(n, c)| format!("{n}:{c}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// What the ledger can say about `pages` — see [`GuestWriteReach`].
@@ -4059,7 +4111,14 @@ pub(super) fn record_guest_write_debt(
     // Before the flag and under the same lock: a reader that observes the flag
     // set must observe a footprint that already names this write, or it would be
     // told "disjoint" about pages this write is landing in.
-    arm_guest_write_pages(pages);
+    arm_guest_write_pages_from(
+        pages,
+        match source {
+            GuestWriteSource::ResidentTarget(_) => "copy_from_resident_target",
+            GuestWriteSource::ResidentStorage(_) => "copy_from_compute_storage",
+            GuestWriteSource::RingEntry => "copy_from_ring_entry",
+        },
+    );
     // Published after the ledger entry and while the engine lock is still held,
     // so no thread can observe the flag clear while a write is outstanding.
     GUEST_WRITE_DEBT.store(true, std::sync::atomic::Ordering::Release);
@@ -5992,6 +6051,29 @@ mod guest_write_footprint_tests {
         // Unsorted input on both sides: the arm sorts, the ask does not have to.
         assert_eq!(reach(&[0xf000, 0x4000, 0x1000]), GuestWriteReach::Overlap);
         clear_guest_write_pages();
+    }
+
+    /// A release that finds an outstanding write is only actionable if it can
+    /// say whose write it is: a copy names what it copies from, a render target
+    /// drawn straight into guest pages names itself, and a rail whose write
+    /// misses the pages is not named at all.
+    #[test]
+    fn a_reach_report_names_only_the_rails_whose_writes_touch_the_pages() {
+        clear_guest_write_pages();
+        arm_guest_write_pages_from(&[0x4000, 0x5000], "copy_from_ring_entry");
+        arm_guest_write_pages_from(&[0x7000], "copy_from_resident_target");
+        arm_guest_write_footprint(&footprint());
+        assert_eq!(guest_write_reach_sources(&[0xf000]), "none");
+        assert_eq!(
+            guest_write_reach_sources(&[0x5000]),
+            "copy_from_ring_entry:1"
+        );
+        assert_eq!(
+            guest_write_reach_sources(&[0x9000, 0x4000]),
+            "copy_from_ring_entry:1,guest_backed_target:1"
+        );
+        clear_guest_write_pages();
+        assert_eq!(guest_write_reach_sources(&[0x5000]), "none");
     }
 
     #[test]

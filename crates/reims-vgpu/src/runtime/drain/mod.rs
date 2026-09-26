@@ -5220,6 +5220,12 @@ fn settle_writes_into_released_pages(
         return;
     }
     let settle = release_settle_enabled();
+    // Taken before the settle, which clears the ledger it reads.
+    let sources = if reach == Reach::Overlap {
+        backend.guest_write_reach_sources(pages)
+    } else {
+        String::new()
+    };
     let started = std::time::Instant::now();
     if settle {
         crate::runtime::render_writeback::settle_guest_writes(
@@ -5238,7 +5244,7 @@ fn settle_writes_into_released_pages(
     {
         crate::observe::fail(format!(
             "released_pages reason=released_with_guest_write_outstanding op={op} {} pages={} \
-             waited_us={waited_us} settle={} (the guest is taking back pages a GPU write this \
+             waited_us={waited_us} settle={} sources={sources} (the guest is taking back pages a GPU write this \
              device recorded has not been settled into; a write that lands after the release \
              lands in whatever the guest made of them)",
             detail(),
