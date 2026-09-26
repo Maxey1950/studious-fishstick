@@ -65,9 +65,11 @@
 # evidence, and paying for it can hide the panic that is.
 #
 # `--autoboot` removes the picker from an unattended batch. `ShowPicker=false`
-# boots the default entry without drawing the menu, and `HideAuxiliary=true`
-# takes Recovery, Reset NVRAM and the tools out of the candidate set, so on an
-# OSX-KVM rail the entry left to be the default is the installed volume. A
+# boots the default entry without drawing the menu, `HideAuxiliary=true` takes
+# Recovery, Reset NVRAM and the tools out of the candidate set, and
+# `ScanPolicy=0x010F0103` (APFS only) takes out the OpenCore disk's own ESP,
+# which an OSX-KVM rail lists as "EFI" and can hold as the default — so the
+# entry left to be the default is the installed volume. A
 # picker that waits — or a timeout that counts down onto the wrong entry — is a
 # `--testing` boot that spends its whole budget at the menu and then reads as a
 # wedge verdict (124) about a device that never ran.
@@ -215,6 +217,10 @@ setpath(cfg, ["Misc", "Boot", "Timeout"], 5)
 if autoboot:
     setpath(cfg, ["Misc", "Boot", "ShowPicker"], False)
     setpath(cfg, ["Misc", "Boot", "HideAuxiliary"], True)
+    # 0x010F0103: file-system and device locks, APFS only, on SATA/SAS/SCSI/NVMe/PCI.
+    # Without it the OpenCore disk's own ESP is a candidate ("EFI"), and on an
+    # OSX-KVM rail it can be the default the picker-less boot lands on.
+    setpath(cfg, ["Misc", "Security", "ScanPolicy"], 0x010F0103)
 
 # boot-args is a single space-separated string, and it belongs to the guest as
 # much as to us — it can carry csr-active-config-adjacent tuning, vti=, tlbto_us=
@@ -321,7 +327,8 @@ kernel_only = sys.argv[2] == "1"
 autoboot = sys.argv[3] == "1"
 if autoboot:
     boot = cfg["Misc"]["Boot"]
-    if boot.get("ShowPicker") is not False or boot.get("HideAuxiliary") is not True:
+    if (boot.get("ShowPicker") is not False or boot.get("HideAuxiliary") is not True
+            or cfg["Misc"]["Security"].get("ScanPolicy") != 0x010F0103):
         sys.exit("rail-debug-posture: read-back mismatch (ShowPicker=%r HideAuxiliary=%r)"
                  % (boot.get("ShowPicker"), boot.get("HideAuxiliary")))
     print("  verified ShowPicker=False HideAuxiliary=True")
