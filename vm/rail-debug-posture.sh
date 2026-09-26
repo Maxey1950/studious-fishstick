@@ -20,6 +20,7 @@
 #   vm/rail-debug-posture.sh --rail macos-12
 #   vm/rail-debug-posture.sh --rail macos-14 --label 2026-08-09-serial-debug
 #   vm/rail-debug-posture.sh --rail macos-15 --dry-run
+#   vm/rail-debug-posture.sh --rail macos-13 --kernel-only
 #
 # It never edits a snapshot in place. Snapshot directories are read-only by
 # contract — `vm/boot-x86.sh` reflink-clones whichever one `current` names and
@@ -49,6 +50,18 @@
 # value, and the rails do not have to agree bit for bit. If an existing
 # `boot-args` already carries a `debug=`, this script rewrites that one key and
 # leaves every other argument alone rather than replacing the string.
+#
+# `--kernel-only` IS THE LIGHT POSTURE. It leaves OpenCore's own logging exactly
+# as the rail had it and asks only XNU to talk: `-v` puts the kernel's console
+# on the screen, `serial=3` sends it to COM1 as well (which `boot-x86.sh`
+# --interactive multiplexes onto the terminal), and `debug=0x10A` still holds a
+# panic on screen instead of rebooting. The full posture's `Target = 75` carries
+# OpenCore's file bit, and a file sink flushes to the ESP on every line; on a
+# fresh OSX-KVM rail that turned the kernel-collection load after
+# `VoodooPS2Controller.kext … is missing` into a boot that looked hung — before
+# XNU, so before the device under test had run at all. When the question is
+# "what did the kernel say before it panicked", OpenCore's log is not the
+# evidence, and paying for it can hide the panic that is.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,6 +71,7 @@ RAIL=""
 FROM=""
 LABEL=""
 DRY_RUN=0
+KERNEL_ONLY=0
 
 die() { echo "rail-debug-posture: $*" >&2; exit 1; }
 say() { echo "rail-debug-posture: $*"; }
@@ -71,6 +85,7 @@ while [ $# -gt 0 ]; do
     --label) shift; LABEL="${1:-}"; [ -n "$LABEL" ] || die "--label needs a name"; shift ;;
     --label=*) LABEL="${1#--label=}"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --kernel-only) KERNEL_ONLY=1; shift ;;
     -h|--help) sed -n '2,60p' "$0"; exit 0 ;;
     *) die "unknown arg: $1" ;;
   esac
@@ -89,7 +104,11 @@ fi
 [ -d "$SRC" ] || die "source snapshot not found: $SRC"
 [ -f "$SRC/OpenCore.qcow2" ] || die "no OpenCore.qcow2 in $SRC"
 
-LABEL="${LABEL:-$(date +%Y-%m-%d)-serial-debug}"
+if [ "$KERNEL_ONLY" -eq 1 ]; then
+  LABEL="${LABEL:-$(date +%Y-%m-%d)-kernel-verbose}"
+else
+  LABEL="${LABEL:-$(date +%Y-%m-%d)-serial-debug}"
+fi
 DST="$RAIL_DIR/snapshots/$LABEL"
 
 say "rail=$RAIL"
@@ -141,10 +160,11 @@ mcopy -i "$WORK/esp.img" ::/EFI/OC/config.plist "$WORK/config.plist" \
   || die "no EFI/OC/config.plist in this image"
 
 # --- Edit the plist ---------------------------------------------------------
-python3 - "$WORK/config.plist" "$WORK/config.new.plist" "$DRY_RUN" <<'PY'
+python3 - "$WORK/config.plist" "$WORK/config.new.plist" "$DRY_RUN" "$KERNEL_ONLY" <<'PY'
 import plistlib, sys
 
 src, dst, dry = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+kernel_only = sys.argv[4] == "1"
 with open(src, "rb") as f:
     cfg = plistlib.load(f)
 
@@ -173,11 +193,12 @@ def setpath(container, path, value):
     if not dry:
         node[leaf] = value
 
-setpath(cfg, ["Misc", "Debug", "Target"], 75)
-setpath(cfg, ["Misc", "Debug", "AppleDebug"], True)
-setpath(cfg, ["Misc", "Debug", "ApplePanic"], True)
-setpath(cfg, ["Misc", "Debug", "DisableWatchDog"], True)
-setpath(cfg, ["Misc", "Serial", "Init"], True)
+if not kernel_only:
+    setpath(cfg, ["Misc", "Debug", "Target"], 75)
+    setpath(cfg, ["Misc", "Debug", "AppleDebug"], True)
+    setpath(cfg, ["Misc", "Debug", "ApplePanic"], True)
+    setpath(cfg, ["Misc", "Debug", "DisableWatchDog"], True)
+    setpath(cfg, ["Misc", "Serial", "Init"], True)
 setpath(cfg, ["Misc", "Boot", "Timeout"], 5)
 
 # boot-args is a single space-separated string, and it belongs to the guest as
@@ -185,6 +206,11 @@ setpath(cfg, ["Misc", "Boot", "Timeout"], 5)
 # and whatever else a rail was provisioned with. Rewrite only the keys named
 # here and leave every other token in place and in order.
 WANT = {"debug": "0x10A", "keepsyms": "1"}
+# Bare flags carry no `=`; a token equal to one is already present.
+FLAGS = []
+if kernel_only:
+    WANT["serial"] = "3"
+    FLAGS.append("-v")
 try:
     add = cfg["NVRAM"]["Add"][BOOT_ARGS_GUID]
 except (KeyError, TypeError):
@@ -198,7 +224,11 @@ else:
     toks, seen = [], set()
     for tok in raw.split():
         key = tok.split("=", 1)[0]
-        if key in WANT:
+        if tok in FLAGS:
+            seen.add(tok)
+            changes.append(("same", "boot-args/" + tok, tok))
+            toks.append(tok)
+        elif key in WANT:
             seen.add(key)
             new = "%s=%s" % (key, WANT[key])
             if tok != new:
@@ -212,6 +242,10 @@ else:
         if key not in seen:
             changes.append(("set", "boot-args/" + key, "<absent> -> %s=%s" % (key, val)))
             toks.append("%s=%s" % (key, val))
+    for flag in FLAGS:
+        if flag not in seen:
+            changes.append(("set", "boot-args/" + flag, "<absent> -> %s" % flag))
+            toks.append(flag)
     joined = " ".join(toks)
     if not dry:
         add["boot-args"] = joined
@@ -264,17 +298,31 @@ dd if="$WORK/verify.raw" of="$WORK/verify-esp.img" bs=1M skip=$((PART_OFF / 1048
    count=$(( (PART_LEN + 1048575) / 1048576 )) status=none
 mcopy -i "$WORK/verify-esp.img" ::/EFI/OC/config.plist "$WORK/verify.plist" \
   || die "the rebuilt image has no EFI/OC/config.plist — not repointing current"
-python3 - "$WORK/verify.plist" <<'PY'
+python3 - "$WORK/verify.plist" "$KERNEL_ONLY" <<'PY'
 import plistlib, sys
 with open(sys.argv[1], "rb") as f:
     cfg = plistlib.load(f)
+kernel_only = sys.argv[2] == "1"
 target = cfg["Misc"]["Debug"]["Target"]
 serial = cfg["Misc"]["Serial"]["Init"]
 timeout = cfg["Misc"]["Boot"]["Timeout"]
-if target != 75 or serial is not True or timeout != 5:
-    sys.exit("rail-debug-posture: read-back mismatch "
-             "(Target=%r Serial/Init=%r Timeout=%r)" % (target, serial, timeout))
-print("  verified Target=75 Serial/Init=True Timeout=5")
+args = cfg["NVRAM"]["Add"]["7C436110-AB2A-4BBB-A880-FE41995C9F82"].get("boot-args", "")
+if isinstance(args, bytes):
+    args = args.decode("utf-8", "replace")
+toks = args.split()
+if kernel_only:
+    # The light posture's whole claim is that the kernel talks; the OpenCore
+    # keys are the rail's own and are deliberately not checked.
+    missing = [t for t in ("-v", "serial=3", "debug=0x10A") if t not in toks]
+    if missing or timeout != 5:
+        sys.exit("rail-debug-posture: read-back mismatch (boot-args=%r missing=%r "
+                 "Timeout=%r)" % (args, missing, timeout))
+    print("  verified boot-args=%r Timeout=5" % args)
+else:
+    if target != 75 or serial is not True or timeout != 5:
+        sys.exit("rail-debug-posture: read-back mismatch "
+                 "(Target=%r Serial/Init=%r Timeout=%r)" % (target, serial, timeout))
+    print("  verified Target=75 Serial/Init=True Timeout=5")
 PY
 
 mv "$STAGE" "$DST"
