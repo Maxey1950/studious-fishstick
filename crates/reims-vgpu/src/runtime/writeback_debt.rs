@@ -726,6 +726,7 @@ pub fn pay_for_mapping<M: HostMemory + HostOps>(
     host: &mut M,
     mapping_id: u32,
 ) {
+    let _paying = paying("debt_pay_mapping");
     if state.pending_writebacks.is_empty() {
         return;
     }
@@ -757,6 +758,7 @@ pub fn pay_for_mapping<M: HostMemory + HostOps>(
 /// rail must not do. [`note_unnamed_reach`] is the instrument that says whether
 /// it would be worth it; read its doc before building one.
 pub fn pay_all<M: HostMemory + HostOps>(state: &mut DeviceState, host: &mut M) {
+    let _paying = paying("debt_pay_all");
     if state.pending_writebacks.is_empty() {
         return;
     }
@@ -988,6 +990,7 @@ pub fn pay_for_texture<M: HostMemory + HostOps>(
     task_id: u32,
     texture_ref: u32,
 ) {
+    let _paying = paying("debt_pay_texture");
     if state.pending_writebacks.is_empty() {
         return;
     }
@@ -1420,6 +1423,7 @@ pub(crate) fn pay_key<M: HostMemory + HostOps>(
     host: &mut M,
     key: WritebackKey,
 ) -> bool {
+    let _paying = paying("debt_pay_key");
     match key {
         WritebackKey::Mapping(mapping_id) => {
             if let Some(debt) = state.pending_writebacks.take(mapping_id) {
@@ -2595,5 +2599,69 @@ mod tests {
         submit_for_resources(&mut state, &mut host, 1, &[7]);
         assert!(state.pending_writebacks.get(7).is_none());
         assert!(state.pending_writebacks.get(8).is_some());
+    }
+}
+
+thread_local! {
+    /// Why the guest-page write being recorded on this thread is happening:
+    /// `"store"` outside every payment, or the payment that asked for it.
+    static PAYING: std::cell::Cell<&'static str> = const { std::cell::Cell::new("store") };
+}
+
+/// Why a guest-page write recorded now is happening, for the rail's ledger to
+/// file beside it. Diagnostic only: nothing may decide on it.
+///
+/// A debt is paid after the Store that incurred it, and so possibly after the
+/// completion stamp the guest last waited on. The guest releases a surface
+/// before it tells this device, so a write landing then can land in pages the
+/// guest has already reused, and the only way a release report can tell that
+/// case from an eager Store is to have been told at the record which one it was.
+pub(crate) fn paying_for() -> &'static str {
+    PAYING.with(std::cell::Cell::get)
+}
+
+/// Mark this thread as paying a debt for the guard's lifetime. Nested payments
+/// keep the outermost reason, because that is the one that decided to pay.
+fn paying(purpose: &'static str) -> Paying {
+    let prev = PAYING.with(|p| {
+        let prev = p.get();
+        if prev == "store" {
+            p.set(purpose);
+        }
+        prev
+    });
+    Paying(prev)
+}
+
+/// Restores the previous payment reason on drop, so a refusal or an early
+/// return inside a payment cannot leave the thread labelled.
+struct Paying(&'static str);
+
+impl Drop for Paying {
+    fn drop(&mut self) {
+        PAYING.with(|p| p.set(self.0));
+    }
+}
+
+#[cfg(test)]
+mod paying_tests {
+    use super::{paying, paying_for};
+
+    /// The outermost payment names the write, and leaving it — normally or by
+    /// an early return — puts the thread back to `"store"`, so a later eager
+    /// Store is never filed as a payment.
+    #[test]
+    fn a_payment_labels_its_writes_and_only_while_it_runs() {
+        assert_eq!(paying_for(), "store");
+        {
+            let _outer = paying("debt_pay_key");
+            assert_eq!(paying_for(), "debt_pay_key");
+            {
+                let _inner = paying("debt_pay_mapping");
+                assert_eq!(paying_for(), "debt_pay_key", "the outermost reason wins");
+            }
+            assert_eq!(paying_for(), "debt_pay_key");
+        }
+        assert_eq!(paying_for(), "store");
     }
 }

@@ -1600,7 +1600,7 @@ struct GuestWriteFootprint {
     /// What each [`Self::armed`] entry copies from, index for index — so a
     /// reader that finds an outstanding write over its pages can say which rail
     /// recorded it. `"merged"` once the entry cap has folded arms together.
-    armed_sources: Vec<&'static str>,
+    armed_sources: Vec<(&'static str, &'static str)>,
     /// Resource-owned allocation footprints. A repeated Store into the same
     /// admitted resident retains one immutable identity here rather than
     /// copying and sorting its full page list again. These need no artificial
@@ -1645,14 +1645,15 @@ fn arm_guest_write_pages_from(pages: &[u64], source: &'static str) {
             oldest.sort_unstable();
             oldest.dedup();
             if let Some(tag) = f.armed_sources.first_mut() {
-                *tag = "merged";
+                *tag = ("merged", "merged");
             }
             crate::runtime::drain::note_store_route("gwdebt_merged");
             return;
         }
     }
     f.armed.push(sorted);
-    f.armed_sources.push(source);
+    f.armed_sources
+        .push((source, crate::runtime::writeback_debt::paying_for()));
 }
 
 /// Record one resource-owned allocation that an outstanding GPU Store writes.
@@ -1690,19 +1691,24 @@ pub fn guest_write_reach_sources(pages: &[u64]) -> String {
     let Ok(f) = GUEST_WRITE_PAGES.lock() else {
         return "ledger_poisoned".to_owned();
     };
-    let mut counts: Vec<(&'static str, usize)> = Vec::new();
-    let mut bump = |name: &'static str| match counts.iter_mut().find(|(n, _)| *n == name) {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    let mut bump = |name: String| match counts.iter_mut().find(|(n, _)| *n == name) {
         Some((_, c)) => *c += 1,
         None => counts.push((name, 1)),
     };
     for (i, armed) in f.armed.iter().enumerate() {
         if pages.iter().any(|p| armed.binary_search(p).is_ok()) {
-            bump(f.armed_sources.get(i).copied().unwrap_or("unlabelled"));
+            let (source, why) = f
+                .armed_sources
+                .get(i)
+                .copied()
+                .unwrap_or(("unlabelled", "unlabelled"));
+            bump(format!("{source}@{why}"));
         }
     }
     for allocation in &f.allocations {
         if pages.iter().any(|p| allocation.contains_page(*p)) {
-            bump("guest_backed_target");
+            bump("guest_backed_target".to_owned());
         }
     }
     if counts.is_empty() {
@@ -6066,11 +6072,11 @@ mod guest_write_footprint_tests {
         assert_eq!(guest_write_reach_sources(&[0xf000]), "none");
         assert_eq!(
             guest_write_reach_sources(&[0x5000]),
-            "copy_from_ring_entry:1"
+            "copy_from_ring_entry@store:1"
         );
         assert_eq!(
             guest_write_reach_sources(&[0x9000, 0x4000]),
-            "copy_from_ring_entry:1,guest_backed_target:1"
+            "copy_from_ring_entry@store:1,guest_backed_target:1"
         );
         clear_guest_write_pages();
         assert_eq!(guest_write_reach_sources(&[0x5000]), "none");
