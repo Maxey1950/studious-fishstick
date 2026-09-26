@@ -5126,7 +5126,12 @@ fn note_released_or_remapped<H: HostMemory + HostOps>(
     length: u64,
     family: MapFamily,
 ) {
-    if !crate::runtime::node_guard::enabled() {
+    let guards = crate::runtime::node_guard::enabled();
+    let unmap = family == MapFamily::UnmapMemory;
+    // The settle below is a repair, not an observation, so it is not allowed
+    // to hang off the guards' switch: `REIMS_VGPU_PAGE_GUARDS=off` must remove
+    // instruments and nothing else.
+    if !(guards || (unmap && crate::backend::selected().guest_writes_outstanding())) {
         return;
     }
     let pages = crate::runtime::gva_mem::task_gva_page_gpa_set(
@@ -5140,20 +5145,114 @@ fn note_released_or_remapped<H: HostMemory + HostOps>(
     if pages.is_empty() {
         return;
     }
+    if unmap {
+        let listed: Vec<u64> = pages.iter().copied().collect();
+        settle_writes_into_released_pages("unmap", &listed, || {
+            format!("task={task_id} gva={gva:#x} len={length:#x}")
+        });
+    }
+    if !guards {
+        return;
+    }
     let writes = &mut state.host_writes;
-    match family {
-        MapFamily::UnmapMemory => {
-            for gpa in pages {
-                writes.release_page(gpa);
-            }
+    if unmap {
+        for gpa in pages {
+            writes.release_page(gpa);
         }
-        _ => {
-            for gpa in pages {
-                writes.remap_page(gpa);
-            }
+    } else {
+        for gpa in pages {
+            writes.remap_page(gpa);
         }
     }
 }
+
+/// Whether an unmap or a backing delete settles the guest-page writes still
+/// outstanding over the pages it releases. See `config::RELEASE_SETTLE`.
+fn release_settle_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        crate::config::switch(crate::config::RELEASE_SETTLE) != crate::config::Switch::Off
+    })
+}
+
+/// Land every outstanding guest-page write that reaches `pages` before the
+/// guest's release of them is applied, and say so when one did.
+///
+/// # Why this is owed, and why it is not enough on its own
+///
+/// Every GPU writer that reaches guest RAM through the host-pointer import
+/// names its pages when it is **recorded** — `DeviceState::note_host_wrote_*`
+/// is called before the write by design — and the write lands when its fence
+/// signals. A draw batch has no time bound, so that can be long after. The
+/// `released_pages` guard checks at the naming, so a release that falls between
+/// the record and the landing is invisible to it; this is the check at the
+/// other end.
+///
+/// It narrows the window rather than closing it. The guest releases pages
+/// before it tells this device (`released_pages`' measured ordering: the unwire
+/// finishes before the packet is read nineteen times in twenty), so a write
+/// still in flight here may already be too late. What the settle removes is the
+/// unbounded part — a write parked in an open batch, or queued behind a ring
+/// nobody is waiting on, landing tens of milliseconds after the guest has
+/// handed the page to its own allocator.
+///
+/// `waited_us` is the discriminator a boot is read by: the ledger is cleared
+/// only at settles, so an overlap with a near-zero wait is a write that had
+/// already landed and was never settled, and one with a real wait is a write
+/// that was still in flight when the guest took its pages back.
+fn settle_writes_into_released_pages(
+    op: &'static str,
+    pages: &[u64],
+    detail: impl FnOnce() -> String,
+) {
+    use crate::backend::GuestWriteReach as Reach;
+    let backend = crate::backend::selected();
+    if !backend.guest_writes_outstanding() {
+        return;
+    }
+    let reach = backend.guest_writes_reaching(pages);
+    note_store_route(match reach {
+        Reach::Disjoint => "release_write_disjoint",
+        Reach::Overlap => "release_write_overlap",
+        Reach::Unnamed => "release_write_unnamed",
+    });
+    if reach == Reach::Disjoint {
+        return;
+    }
+    let settle = release_settle_enabled();
+    let started = std::time::Instant::now();
+    if settle {
+        crate::runtime::render_writeback::settle_guest_writes(
+            crate::runtime::render_writeback::SettleSite::UnmapRelease,
+        );
+    }
+    let waited_us = started.elapsed().as_micros() as u64;
+    if reach == Reach::Overlap && waited_us >= RELEASE_IN_FLIGHT_US {
+        note_store_route("release_write_in_flight");
+    }
+    if reach == Reach::Overlap
+        && crate::observe::first_sight(
+            "released_with_guest_write_outstanding",
+            pages.first().copied().unwrap_or(0),
+        )
+    {
+        crate::observe::fail(format!(
+            "released_pages reason=released_with_guest_write_outstanding op={op} {} pages={} \
+             waited_us={waited_us} settle={} (the guest is taking back pages a GPU write this \
+             device recorded has not been settled into; a write that lands after the release \
+             lands in whatever the guest made of them)",
+            detail(),
+            pages.len(),
+            if settle { "on" } else { "off" },
+        ));
+    }
+}
+
+/// A settle at least this long waited on work that had not finished, rather
+/// than only clearing a ledger entry whose write had already landed. One
+/// hundred microseconds is well above the lock-and-retire cost of a ring whose
+/// fences are all signalled, and far below any GPU copy of a surface.
+const RELEASE_IN_FLIGHT_US: u64 = 100;
 
 /// Say whether this range's entries are there, and on a map — the one direction
 /// the guest orders — treat their absence as the defect it is.
@@ -5456,6 +5555,16 @@ fn apply_map_family<H: HostMemory + HostOps>(
         // bookkeeping. Keeping page_entries after it lets later id reuse/clear
         // write pixels into pages the guest has recycled.
         let crate::protocol::fifo::DeleteBackingCommand { object_id, task_id } = retire;
+        // Before anything below forgets the pages: an outstanding GPU write into
+        // this backing is about to land in memory the guest has already
+        // released. See `settle_writes_into_released_pages`.
+        if crate::backend::selected().guest_writes_outstanding() {
+            if let Some(pages) = state.mapping_reach_pages(object_id) {
+                settle_writes_into_released_pages("delete_backing", &pages, || {
+                    format!("task={task_id} object={object_id}")
+                });
+            }
+        }
         // The retirement, in the model that owns the names over these bytes.
         // The contract retires the backing *and* the resources that named it,
         // so the teardowns below are the model's per-name answers rather than a

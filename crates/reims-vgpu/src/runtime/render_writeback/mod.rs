@@ -714,6 +714,11 @@ settle_sites! {
     MappingBytesWrite => "settle_mapping_bytes_write",
     /// `mapper::read_mapping_bytes`.
     MappingBytesRead => "settle_mapping_bytes_read",
+    /// `drain::note_released_or_remapped` — an unmap releasing pages an
+    /// outstanding guest-page write still lands in. Not a reader: the wait is
+    /// owed because the guest is taking the pages back, and a write that lands
+    /// afterwards lands in whatever they became.
+    UnmapRelease => "settle_unmap_release",
 }
 
 /// Block until every guest-page write this device has submitted has executed.

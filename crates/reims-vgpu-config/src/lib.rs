@@ -1185,6 +1185,25 @@ pub const COLOR_GENERAL: &str = "REIMS_VGPU_COLOR_GENERAL";
 /// outcome a tiling compositor already produces. `host_window::present`'s
 /// `WindowMode` owns both halves.
 pub const FULLSCREEN: &str = "REIMS_VGPU_FULLSCREEN";
+
+/// `off` stops an unmap from settling the guest-page writes still outstanding
+/// over the range it releases. The overlap is still counted and reported; only
+/// the wait is removed.
+///
+/// It is the A/B for one repair, which is why it defaults on. Every writer that
+/// lands in guest RAM through the host-pointer import names its pages when it
+/// is **recorded**, and the GPU lands it when the fence says so — which, with a
+/// draw batch that has no time bound, can be long after. An unmap is the guest
+/// taking those pages back; a write that lands after it lands in whatever the
+/// guest has made of them since, and on a driven macos-13 x86/Vulkan rail with
+/// the import on that was a guest panic on every boot (`AppleParavirtPageTable`
+/// teardown, `Taking non-sleepable RW lock with preemption enabled`, page
+/// faults in the kernel, APFS `Data hash mismatch` on pages the device never
+/// named), and none with `REIMS_VGPU_GUEST_IMPORT=off`.
+///
+/// It narrows in the sense this module requires: `off` removes a wait and
+/// reaches no rail the default does not.
+pub const RELEASE_SETTLE: &str = "REIMS_VGPU_RELEASE_SETTLE";
 }
 
 counts! {
