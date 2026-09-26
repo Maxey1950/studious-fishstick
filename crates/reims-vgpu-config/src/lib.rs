@@ -1204,6 +1204,20 @@ pub const FULLSCREEN: &str = "REIMS_VGPU_FULLSCREEN";
 /// It narrows in the sense this module requires: `off` removes a wait and
 /// reaches no rail the default does not.
 pub const RELEASE_SETTLE: &str = "REIMS_VGPU_RELEASE_SETTLE";
+
+/// `off` stops a writeback-debt payment from waiting for its guest-page copy to
+/// land before the drain moves on.
+///
+/// A payment copies a frame into the guest's pages after the packet that owed
+/// it was answered, and on the import rail that copy is submitted and not
+/// waited. On a driven macos-13 x86/Vulkan rail every late write the release
+/// check caught over a composite surface was such a copy
+/// (`copy_from_resident_target@debt_pay_texture`), still in flight 6-23 ms into
+/// the guest's unmap of it. Default on; this is its A/B.
+///
+/// It narrows in the sense this module requires: `off` removes a wait and
+/// reaches no rail the default does not.
+pub const DEBT_SETTLE: &str = "REIMS_VGPU_DEBT_SETTLE";
 }
 
 counts! {

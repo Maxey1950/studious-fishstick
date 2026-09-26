@@ -719,6 +719,10 @@ settle_sites! {
     /// owed because the guest is taking the pages back, and a write that lands
     /// afterwards lands in whatever they became.
     UnmapRelease => "settle_unmap_release",
+    /// `writeback_debt`'s payments — a copy made after the packet that owed
+    /// it, landed before the drain moves on so no later stamp or unmap can
+    /// overtake it.
+    DebtPayment => "settle_debt_payment",
 }
 
 /// Block until every guest-page write this device has submitted has executed.

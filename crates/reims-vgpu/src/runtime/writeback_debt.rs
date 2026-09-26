@@ -2634,13 +2634,49 @@ fn paying(purpose: &'static str) -> Paying {
 }
 
 /// Restores the previous payment reason on drop, so a refusal or an early
-/// return inside a payment cannot leave the thread labelled.
+/// return inside a payment cannot leave the thread labelled — and, when the
+/// outermost payment ends, lands what it paid. See [`settle_payment`].
 struct Paying(&'static str);
 
 impl Drop for Paying {
     fn drop(&mut self) {
         PAYING.with(|p| p.set(self.0));
+        if self.0 == "store" {
+            settle_payment();
+        }
     }
+}
+
+/// Whether a debt payment waits for its copy to land. See `config::DEBT_SETTLE`.
+fn debt_settle_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        crate::config::switch(crate::config::DEBT_SETTLE) != crate::config::Switch::Off
+    })
+}
+
+/// Land a payment's guest-page copies before the drain moves on.
+///
+/// A payment is the one guest-page write this device makes **after** the
+/// packet that owed it: the Store parked the frame in the resident, the guest
+/// was answered, and the copy is made later because something now reads those
+/// pages. On the import rail that copy is submitted and not waited, and nothing
+/// orders the guest's next move after it — on a driven macos-13 rail every
+/// `released_with_guest_write_outstanding` over a 1920x1080 composite surface
+/// was `copy_from_resident_target@debt_pay_texture`, still in flight 6-23 ms
+/// after the guest began unmapping it, and the boot panicked. Waiting here puts
+/// the copy behind the drain's own progress, so it has landed before any later
+/// stamp is published and before any later unmap is read.
+///
+/// Cheap where nothing was paid: `settle_guest_writes` is one flag load when no
+/// write is outstanding.
+fn settle_payment() {
+    if !debt_settle_enabled() {
+        return;
+    }
+    crate::runtime::render_writeback::settle_guest_writes(
+        crate::runtime::render_writeback::SettleSite::DebtPayment,
+    );
 }
 
 #[cfg(test)]
