@@ -22,6 +22,10 @@
   button { cursor: pointer; }
   button:hover { background: #4a4a6c; }
   #status { margin-left: auto; opacity: .8; }
+  .conn::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #888; }
+  .conn.on::before { background: #4cbb6c; }
+  .conn.wait::before { background: #e3b341; }
+  .conn.off::before { background: #cf222e; }
 
   /* Editor and its loading screen */
   #stage { position: relative; flex: 1; }
@@ -103,6 +107,7 @@
     </span>
     <button id="export" title="Download the whole project">Export</button>
     <button id="open-setup" title="Project, levels and collaboration">&#9881; Setup</button>
+    <span id="conn" class="conn off">Not connected</span>
     <span id="status"></span>
   </div>
   <div id="stage">
@@ -151,11 +156,14 @@
 
     <section>
       <h2><span class="num">3</span> Play together</h2>
+      <label class="choice"><input type="radio" name="mode" value="peer"> <b>Online with friends</b> <span class="hint">&mdash; computers connect directly</span></label>
       <label class="choice"><input type="radio" name="mode" value="tabs"> Just this computer <span class="hint">&mdash; tabs in this browser</span></label>
-      <label class="choice"><input type="radio" name="mode" value="relay"> Online with friends <span class="hint">&mdash; needs a relay server</span></label>
+      <label class="choice"><input type="radio" name="mode" value="relay"> Relay server <span class="hint">&mdash; advanced</span></label>
       <input id="relay-url" placeholder="Relay address, e.g. wss://your-relay.example">
-      <label style="display:block;margin-top:10px">Room name <input id="setup-room"></label>
-      <p class="hint">Everyone who uses the same room name edits together.</p>
+      <label style="display:block;margin-top:10px">Room code
+        <span style="display:flex;gap:8px"><input id="setup-room"><button id="new-room" type="button" style="margin-top:6px">New code</button></span>
+      </label>
+      <p class="hint" id="room-hint"></p>
     </section>
 
     <button id="setup-start" class="primary">Start editing &rarr;</button>

@@ -30,6 +30,7 @@ import { countBlocks } from '../src/shared/history';
 import { changedFiles, isShared, sharedFiles, withFiles, type ProjectText } from '../src/shared/projectFiles';
 import { sameBlocks } from '../src/shared/sameBlocks';
 import { DEFAULT_SYNC_OPTIONS, SyncState } from '../src/shared/syncState';
+import { Peer, type DataConnection } from 'peerjs';
 import {
   applyBlocksDirectly,
   baseIndexOf,
@@ -208,7 +209,7 @@ function socketChannel(url: string, room: string): Channel {
   const queue: string[] = [];
 
   socket.onopen = () => {
-    setStatus(`Connected to ${address.host}`);
+    setConn(`Connected to ${address.host}`, 'on');
     for (const text of queue.splice(0)) {
       socket.send(text);
     }
@@ -221,8 +222,8 @@ function socketChannel(url: string, room: string): Channel {
       // Not ours.
     }
   };
-  socket.onclose = () => setStatus(`Disconnected from ${address.host}`);
-  socket.onerror = () => setStatus(`Could not reach ${address.host}`);
+  socket.onclose = () => setConn(`Disconnected from ${address.host}`, 'off');
+  socket.onerror = () => setConn(`Could not reach ${address.host}`, 'off');
 
   return {
     label: address.host,
@@ -238,17 +239,264 @@ function socketChannel(url: string, room: string): Channel {
   };
 }
 
-function connect(target: string, room: string): void {
+/** A room name as a PeerJS address allows: letters, digits, single dashes. */
+function peerRoom(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'arcade';
+}
+
+/**
+ * Between computers, directly, with no server of our own.
+ *
+ * PeerJS's free server only introduces browsers; after that they talk to each
+ * other directly. A room is one well-known address on that server,
+ * `arcadecollab-<room>`. Whoever opens the room first takes the address and
+ * becomes its host; everyone after finds it taken and joins the host instead.
+ * The host passes each message on to everyone else, so four people need only
+ * one link each to the host, not one to every other person.
+ *
+ * If the host leaves, the others' links close and each of them tries for the
+ * address again after a random pause: one gets it and hosts, the rest join.
+ */
+function peerChannel(roomName: string): Channel {
+  const room = peerRoom(roomName);
+  const hostId = `arcadecollab-${room}`;
+  const links = new Set<DataConnection>();
+  let peer: Peer | undefined;
+  let isHost = false;
+  let closed = false;
+  let retryTimer: number | undefined;
+
+  // Heartbeat. A computer that disappears without saying goodbye — a closed
+  // lid, dropped Wi-Fi, a crash — leaves its links looking open for a long
+  // time, and without the host noticing it is gone nobody takes over. So every
+  // link carries a small "still here" every couple of seconds, and a link that
+  // has been silent too long is treated as gone.
+  const PING = { type: '__ping' } as const;
+  const PING_MS = 2000;
+  const SILENT_MS = 7000;
+  const lastHeard = new Map<DataConnection, number>();
+  const heartbeat = setInterval(() => {
+    const now = Date.now();
+    for (const link of links) {
+      if (now - (lastHeard.get(link) ?? now) > SILENT_MS) {
+        drop(link);
+      } else if (link.open) {
+        link.send(PING);
+      }
+    }
+  }, PING_MS);
+
+  const report = (): void => {
+    if (closed) {
+      return;
+    }
+    const others = links.size;
+    if (isHost) {
+      setConn(
+        others
+          ? `Room ${room}: hosting, ${others} other${others === 1 ? '' : 's'} connected`
+          : `Room ${room}: waiting for friends to join`,
+        others ? 'on' : 'wait'
+      );
+    } else {
+      setConn(others ? `Room ${room}: connected` : `Room ${room}: joining...`, others ? 'on' : 'wait');
+    }
+  };
+
+  const reset = (): void => {
+    for (const link of links) {
+      link.close();
+    }
+    links.clear();
+    lastHeard.clear();
+    peer?.destroy();
+    peer = undefined;
+  };
+
+  /**
+   * A link is gone: forget it, and if it was the host, find a new one. Reached
+   * both from the link's own close event and from the heartbeat, so it has to
+   * be safe to run twice.
+   */
+  function drop(link: DataConnection): void {
+    if (!links.delete(link)) {
+      return;
+    }
+    lastHeard.delete(link);
+    try {
+      link.close();
+    } catch {
+      // Already closing.
+    }
+    report();
+    if (!isHost && !closed) {
+      // The host left: someone has to take over.
+      reset();
+      retry(300);
+    }
+  }
+
+  /** Starts over after a pause, randomised so two people do not collide again. */
+  const retry = (delay: number): void => {
+    if (closed) {
+      return;
+    }
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(claim, delay + Math.random() * 1500) as unknown as number;
+  };
+
+  const wire = (link: DataConnection): void => {
+    let opened = false;
+    // A link that never opens means the direct connection failed; try again.
+    const timeout = setTimeout(() => {
+      if (!opened && !isHost) {
+        setConn(`Room ${room}: could not reach the host, retrying...`, 'wait');
+        reset();
+        retry(2000);
+      }
+    }, 20000);
+
+    link.on('open', () => {
+      opened = true;
+      clearTimeout(timeout);
+      links.add(link);
+      lastHeard.set(link, Date.now());
+      report();
+      if (!isHost) {
+        link.send({ type: 'hello', from: ME } satisfies SyncMessage);
+      }
+    });
+    link.on('data', (data) => {
+      lastHeard.set(link, Date.now());
+      if ((data as { type?: string })?.type === PING.type) {
+        return;
+      }
+      const message = data as SyncMessage;
+      if (isHost) {
+        if (message?.type === 'hello') {
+          // Only the host answers a newcomer, and only to them: otherwise
+          // every join would send the whole project to everyone.
+          onSync(message, (reply) => link.send(reply));
+          return;
+        }
+        for (const other of links) {
+          if (other !== link && other.open) {
+            other.send(message);
+          }
+        }
+      }
+      onSync(message);
+    });
+    link.on('close', () => {
+      clearTimeout(timeout);
+      drop(link);
+    });
+  };
+
+  /** Tries to become the host; if the room is already hosted, joins it. */
+  function claim(): void {
+    reset();
+    isHost = false;
+    const candidate = new Peer(hostId);
+    peer = candidate;
+    candidate.on('open', () => {
+      if (peer === candidate) {
+        isHost = true;
+        report();
+      }
+    });
+    candidate.on('connection', (link) => {
+      if (peer === candidate) {
+        wire(link);
+      }
+    });
+    candidate.on('disconnected', () => {
+      // Lost the introduction server, not the friends: links stay up.
+      if (peer === candidate && !candidate.destroyed) {
+        candidate.reconnect();
+      }
+    });
+    candidate.on('error', (error: { type?: string }) => {
+      if (peer !== candidate) {
+        return;
+      }
+      if (error.type === 'unavailable-id') {
+        join();
+        return;
+      }
+      setConn(`Room ${room}: connection problem (${error.type ?? 'unknown'}), retrying...`, 'off');
+      reset();
+      retry(3000);
+    });
+  }
+
+  function join(): void {
+    peer?.destroy();
+    isHost = false;
+    const guest = new Peer();
+    peer = guest;
+    report();
+    guest.on('open', () => {
+      if (peer === guest) {
+        wire(guest.connect(hostId, { reliable: true }));
+      }
+    });
+    guest.on('disconnected', () => {
+      if (peer === guest && !guest.destroyed) {
+        guest.reconnect();
+      }
+    });
+    guest.on('error', (error: { type?: string }) => {
+      if (peer !== guest) {
+        return;
+      }
+      // The address is held but nobody answers it: the host has just left and
+      // the server has not noticed yet. Try for the address again shortly.
+      if (error.type === 'peer-unavailable') {
+        reset();
+        retry(1000);
+        return;
+      }
+      setConn(`Room ${room}: connection problem (${error.type ?? 'unknown'}), retrying...`, 'off');
+      reset();
+      retry(3000);
+    });
+  }
+
+  claim();
+  return {
+    label: `room ${room}`,
+    send: (message) => {
+      for (const link of links) {
+        if (link.open) {
+          link.send(message);
+        }
+      }
+    },
+    close: () => {
+      closed = true;
+      clearTimeout(retryTimer);
+      clearInterval(heartbeat);
+      reset();
+    },
+  };
+}
+
+type Mode = 'tabs' | 'peer' | 'relay';
+
+function connect(mode: Mode, room: string, relay: string): void {
   channel?.close();
+  setConn('Not connected', 'off');
   try {
-    channel = target ? socketChannel(target, room) : tabsChannel(room);
+    channel =
+      mode === 'relay' ? socketChannel(relay, room) : mode === 'peer' ? peerChannel(room) : tabsChannel(room);
   } catch (error) {
-    setStatus(`Could not connect: ${describe(error)}`);
+    setConn(`Could not connect: ${describe(error)}`, 'off');
     channel = undefined;
     return;
   }
-  if (!target) {
-    setStatus(`Syncing with ${channel.label}`);
+  if (mode === 'tabs') {
+    setConn(`Tabs in this browser (room ${room})`, 'on');
     channel.send({ type: 'hello', from: ME });
   }
 }
@@ -258,13 +506,13 @@ let editedHere = false;
 /** A joiner takes the first full state offered, and only the first. */
 let adoptedState = false;
 
-function onSync(message: SyncMessage): void {
+function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): void {
   if (!message || message.from === ME) {
     return;
   }
   switch (message.type) {
     case 'hello':
-      channel?.send({
+      (reply ?? ((m: SyncMessage) => channel?.send(m)))({
         type: 'state',
         from: ME,
         levels: store.levels,
@@ -609,13 +857,40 @@ function loadLevel(name: string, options: { broadcast?: boolean } = {}): void {
   reloadLevel();
 }
 
-/** Hands the editor the current level afresh, and guards it while it loads. */
+let importTimer: number | undefined;
+
+/**
+ * Hands the editor the current level afresh, and guards it while it loads.
+ *
+ * A load still in progress is never interrupted. Handing MakeCode a project
+ * while it is still loading or compiling the last one trips errors inside its
+ * own loader and compiler — which happens easily when several people follow a
+ * level change at once, or someone joins mid-switch. So a second load waits
+ * for the first to settle, and several in quick succession become one load of
+ * whatever is current by then.
+ */
 function reloadLevel(): void {
+  // A restart queued for the old level would run its program again.
+  clearTimeout(simTimer);
   sync = new SyncState(DEFAULT_SYNC_OPTIONS);
   clearTimeout(syncTimer);
   lastPolled = undefined;
   agreed = '';
   workspaceLoaded = false;
+  project = buildProject();
+
+  clearTimeout(importTimer);
+  const busyFor = settlingUntil - Date.now();
+  if (busyFor > 0) {
+    // Keep the poll paused until the deferred load has actually been sent.
+    settlingUntil += 250;
+    importTimer = setTimeout(sendImport, busyFor) as unknown as number;
+  } else {
+    sendImport();
+  }
+}
+
+function sendImport(): void {
   project = buildProject();
   settlingUntil = Date.now() + SETTLE_MS;
   view()?.postMessage(importProjectMessage(project), '*');
@@ -656,6 +931,12 @@ function listenForGame(): void {
       return;
     }
     if (!store.levelsEnabled) {
+      return;
+    }
+    // While a level is loading, the game still running is the level being
+    // left, and its signal was already acted on. Counting it again would skip
+    // a level: "next" is worked out from the level now loading.
+    if (!workspaceLoaded || Date.now() < settlingUntil) {
       return;
     }
     for (const line of text.split(/\r?\n/)) {
@@ -833,6 +1114,14 @@ function setStatus(text: string): void {
   statusEl.textContent = text;
 }
 
+const connEl = el<HTMLSpanElement>('conn');
+
+/** The connection, shown apart from save messages so it is never hidden by them. */
+function setConn(text: string, state: 'on' | 'wait' | 'off'): void {
+  connEl.textContent = text;
+  connEl.className = `conn ${state}`;
+}
+
 function showLoading(text: string): void {
   loadingText.textContent = text;
   loadingEl.hidden = false;
@@ -885,6 +1174,7 @@ const countEl = el<HTMLSpanElement>('lv-count');
 const chipsEl = el<HTMLDivElement>('lv-chips');
 const relayInput = el<HTMLInputElement>('relay-url');
 const roomInput = el<HTMLInputElement>('setup-room');
+const roomHint = el<HTMLParagraphElement>('room-hint');
 const startButton = el<HTMLButtonElement>('setup-start');
 
 const MIN_LEVELS = 2;
@@ -909,17 +1199,33 @@ function remember(key: string, value: string): void {
   }
 }
 
-function selectedMode(): 'tabs' | 'relay' {
-  const checked = document.querySelector<HTMLInputElement>('input[name="mode"]:checked');
-  return checked?.value === 'relay' ? 'relay' : 'tabs';
+function selectedMode(): Mode {
+  const value = document.querySelector<HTMLInputElement>('input[name="mode"]:checked')?.value;
+  return value === 'relay' || value === 'tabs' ? value : 'peer';
 }
+
+/**
+ * A fresh room code. On PeerJS's public server a room is open to anyone who
+ * types its name, so the default is one nobody else will happen to pick.
+ */
+function randomRoom(): string {
+  const letters = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let code = 'arcade-';
+  for (let i = 0; i < 6; i++) {
+    code += letters[Math.floor(Math.random() * letters.length)];
+  }
+  return code;
+}
+
+/** The connection in use, so Apply reconnects only when something changed. */
+let activeConnection = '';
 
 function openSetup(): void {
   levelsOn.checked = store.levelsEnabled;
   draft.levelCount = Math.max(MIN_LEVELS, Math.min(MAX_LEVELS, levelNames().length > 1 ? levelNames().length : 10));
   relayInput.value = remembered('relay', '');
-  roomInput.value = remembered('room', 'arcade');
-  const mode = remembered('mode', 'tabs');
+  roomInput.value = remembered('room', '') || randomRoom();
+  const mode = remembered('mode', 'peer');
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
     radio.checked = radio.value === mode;
   }
@@ -951,12 +1257,19 @@ function renderSetup(): void {
     })
   );
   relayInput.hidden = selectedMode() !== 'relay';
+  roomHint.textContent =
+    selectedMode() === 'peer'
+      ? 'Give this code to your friends. Everyone who types the same code is in the same game, up to everyone in your group.'
+      : 'Everyone who uses the same room name edits together.';
 }
 
 levelsOn.addEventListener('change', renderSetup);
 for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="mode"]')) {
   radio.addEventListener('change', renderSetup);
 }
+el('new-room').addEventListener('click', () => {
+  roomInput.value = randomRoom();
+});
 el('lv-minus').addEventListener('click', () => {
   draft.levelCount = Math.max(MIN_LEVELS, draft.levelCount - 1);
   renderSetup();
@@ -1015,15 +1328,16 @@ startButton.addEventListener('click', () => {
   // Connection: only reconnected if something about it changed.
   const mode = selectedMode();
   const relay = relayInput.value.trim();
-  const room = roomInput.value.trim() || 'arcade';
+  const room = (mode === 'peer' ? peerRoom(roomInput.value) : roomInput.value.trim()) || 'arcade';
+  roomInput.value = room;
   if (mode === 'relay' && !relay) {
     relayInput.focus();
     return;
   }
-  const target = mode === 'relay' ? relay : '';
-  if (!channel || target !== remembered('relay-active', '-') || room !== remembered('room', '')) {
-    connect(target, room);
-    remember('relay-active', target);
+  const key = `${mode}|${room}|${mode === 'relay' ? relay : ''}`;
+  if (!channel || key !== activeConnection) {
+    connect(mode, room, relay);
+    activeConnection = key;
   }
   remember('mode', mode);
   remember('relay', relay);
