@@ -1032,14 +1032,17 @@ ${lines.join("\n")}`);
         continue;
       }
       unmatched.delete(current.id);
-      if (canonicalize(Blockly.Xml.blockToDom(current)) !== canonicalize(element)) {
+      if (canonicalize(topDom(Blockly, current), false, true) !== canonicalize(element, false, true)) {
         current.dispose(false);
         rebuild.push(element);
+      } else if (canonicalize(topDom(Blockly, current)) !== canonicalize(element)) {
+        placeAt(workspace, current, element);
+        touched?.push(current.id);
       }
     }
     const remaining = /* @__PURE__ */ new Map();
     for (const block of unmatched.values()) {
-      const key = canonicalize(Blockly.Xml.blockToDom(block), true);
+      const key = canonicalize(topDom(Blockly, block), true, true);
       const bucket = remaining.get(key);
       if (bucket) {
         bucket.push(block);
@@ -1048,10 +1051,11 @@ ${lines.join("\n")}`);
       }
     }
     for (const element of byContent) {
-      const bucket = remaining.get(canonicalize(element, true));
+      const bucket = remaining.get(canonicalize(element, true, true));
       const match = bucket?.shift();
       if (match) {
         unmatched.delete(match.id);
+        placeAt(workspace, match, element);
       } else {
         rebuild.push(element);
       }
@@ -1065,6 +1069,9 @@ ${lines.join("\n")}`);
     dropStackedDuplicates(Blockly, workspace);
     for (const element of rebuild) {
       const block = Blockly.Xml.domToBlock(element, workspace);
+      if (block) {
+        placeAt(workspace, block, element);
+      }
       if (touched && block?.id) {
         touched.push(block.id);
       }
@@ -1092,7 +1099,7 @@ ${lines.join("\n")}`);
       if (id) {
         ids.add(id);
       }
-      contents.add(canonicalize(child, true));
+      contents.add(canonicalize(child, true, true));
     }
     return { ids, contents };
   }
@@ -1101,9 +1108,31 @@ ${lines.join("\n")}`);
       if (base.ids.has(block.id)) {
         return true;
       }
-      return base.contents.has(canonicalize(Blockly.Xml.blockToDom(block), true));
+      return base.contents.has(canonicalize(topDom(Blockly, block), true, true));
     } catch {
       return true;
+    }
+  }
+  function topDom(Blockly, block) {
+    return typeof Blockly.Xml.blockToDomWithXY === "function" ? Blockly.Xml.blockToDomWithXY(block) : Blockly.Xml.blockToDom(block);
+  }
+  function placeAt(workspace, block, element) {
+    if (!element.hasAttribute("x") || typeof block.moveBy !== "function") {
+      return;
+    }
+    const x = Number(element.getAttribute("x"));
+    const y = Number(element.getAttribute("y"));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return;
+    }
+    try {
+      const at = block.getRelativeToSurfaceXY();
+      const dx = (workspace.RTL ? -x : x) - at.x;
+      const dy = y - at.y;
+      if (Math.round(dx) || Math.round(dy)) {
+        block.moveBy(dx, dy);
+      }
+    } catch {
     }
   }
   function dropStackedDuplicates(Blockly, workspace) {
@@ -1111,7 +1140,7 @@ ${lines.join("\n")}`);
     for (const block of workspace.getTopBlocks(false)) {
       let key;
       try {
-        key = canonicalize(Blockly.Xml.blockToDom(block), true);
+        key = canonicalize(topDom(Blockly, block), true);
       } catch {
         continue;
       }
@@ -1122,8 +1151,8 @@ ${lines.join("\n")}`);
       }
     }
   }
-  function canonicalize(element, ignoreId = false) {
-    const attributes = Array.from(element.attributes).filter((attribute) => !(ignoreId && attribute.name === "id")).map((attribute) => {
+  function canonicalize(element, ignoreId = false, ignorePosition = false) {
+    const attributes = Array.from(element.attributes).filter((attribute) => !(ignoreId && attribute.name === "id")).filter((attribute) => !(ignorePosition && (attribute.name === "x" || attribute.name === "y"))).map((attribute) => {
       const value = attribute.name === "x" || attribute.name === "y" ? String(Math.round(Number(attribute.value) || 0)) : attribute.value;
       return `${attribute.name}=${value}`;
     }).sort().join(" ");
