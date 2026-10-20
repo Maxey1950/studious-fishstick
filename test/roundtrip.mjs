@@ -25,7 +25,9 @@ const { outputFiles } = await build({
 });
 const stubBundle = outputFiles[0].text;
 
-const browser = await chromium.launch();
+// CHROMIUM_PATH points at an installed browser when Playwright's own download
+// does not match it, as in containers that ship a fixed Chromium.
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const page = await browser.newPage();
 page.on('pageerror', (error) => console.error('page error:', error.message));
 await page.setContent('<div id="blockly" style="width:800px;height:600px"></div>');
