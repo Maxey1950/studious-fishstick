@@ -24,8 +24,17 @@ with the VS Code extension in `../src`.
 
 - **Levels** (optional, switched on in Setup): `level1` … `levelN`, one loaded at
   a time. In the game, `console log "@next"` loads the next level, and
-  `console log "@level level4"` a particular one.
-- **Together:** "Just this computer" syncs tabs in one browser and needs nothing.
-  "Online with friends" needs a WebSocket relay; `relay.mjs` is a minimal one.
+  `console log "@level level4"` a particular one. Each person moves between
+  levels on their own; edits to a level reach whoever has it open.
+- **Together:** online rooms connect computers directly through PeerJS. One
+  person chooses "Host a room": the project is theirs, and only their computer
+  keeps it. Friends choose "Join" with the same code and edit the host's
+  project; nothing saved on their own computers is changed or sent. If the host
+  leaves, the others wait for them to come back. "Just this computer" syncs tabs in
+  one browser. "Relay server" uses a WebSocket relay; `relay.mjs` is a minimal one.
+- **What syncs live:** blocks, without reloading. A new sprite, tilemap or
+  extension reloads the others' editors once, after they let go of any block
+  they are dragging. Blocks or JavaScript, and which level is open, are each
+  person's own.
 - **Storage:** the browser's IndexedDB. Export / Open backup move a project in and
   out; Import folder takes a folder of `.blocks` files and their assets.

@@ -121,7 +121,7 @@
     <h1>Arcade Collab</h1>
     <p class="sub">MakeCode Arcade, together. Set things up, then start the editor.</p>
 
-    <section>
+    <section id="project-section">
       <h2><span class="num">1</span> Project</h2>
       <p id="project-summary"></p>
       <div class="row">
@@ -131,7 +131,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="levels-section">
       <h2><span class="num">2</span> Levels</h2>
       <label class="toggle">
         <input type="checkbox" id="levels-on"><span class="slider"></span>
@@ -156,7 +156,8 @@
 
     <section>
       <h2><span class="num">3</span> Play together</h2>
-      <label class="choice"><input type="radio" name="mode" value="peer"> <b>Online with friends</b> <span class="hint">&mdash; computers connect directly</span></label>
+      <label class="choice"><input type="radio" name="mode" value="host"> <b>Host a room</b> <span class="hint">&mdash; my project; friends join me</span></label>
+      <label class="choice"><input type="radio" name="mode" value="join"> <b>Join a friend's room</b> <span class="hint">&mdash; edit the host's project</span></label>
       <label class="choice"><input type="radio" name="mode" value="tabs"> Just this computer <span class="hint">&mdash; tabs in this browser</span></label>
       <label class="choice"><input type="radio" name="mode" value="relay"> Relay server <span class="hint">&mdash; advanced</span></label>
       <input id="relay-url" placeholder="Relay address, e.g. wss://your-relay.example">
