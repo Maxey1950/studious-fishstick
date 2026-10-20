@@ -536,6 +536,7 @@ function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): v
         current: message.current,
         levelsEnabled: message.levelsEnabled ?? Object.keys(message.levels).length > 1,
       };
+      incoming = { ...store.shared };
       if (!(store.current in store.levels)) {
         store.current = levelNames()[0];
       }
@@ -565,6 +566,7 @@ function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): v
         }
       }
       store.shared = { ...store.shared, ...files };
+      incoming = { ...incoming, ...files };
       persist();
       // The editor reads images and extensions only when it loads a project,
       // so a new sprite from someone else needs the level reloaded to appear.
@@ -608,6 +610,16 @@ let workspaceLoaded = false;
 /** While set, the editor is reloading and what it reports is that reload. */
 let settlingUntil = 0;
 const SETTLE_MS = 2500;
+/**
+ * Files from someone else that the editor has not loaded yet.
+ *
+ * Until it has, the editor keeps saving the project it already had, and those
+ * saves carry the old images. Taken at their word they overwrote the new ones
+ * before the reload could show them, so a sprite drawn on one computer never
+ * appeared on the others. They win over anything the editor reports until the
+ * level has loaded.
+ */
+let incoming: ProjectText = {};
 const POLL_MS = 120;
 
 let sync = new SyncState(DEFAULT_SYNC_OPTIONS);
@@ -653,7 +665,13 @@ window.addEventListener('message', (event: MessageEvent) => {
     case 'projectChanged': {
       // Images, tilemaps and extensions arrive here, never through the
       // workspace, so the shared files are taken from every report.
-      const changed = changedFiles(store.shared, sharedFiles(outcome.project.text));
+      const reported = sharedFiles(outcome.project.text);
+      if (!workspaceLoaded) {
+        for (const name of Object.keys(incoming)) {
+          delete reported[name];
+        }
+      }
+      const changed = changedFiles(store.shared, reported);
       if (Object.keys(changed).length) {
         store.shared = { ...store.shared, ...changed };
         persist();
@@ -733,6 +751,7 @@ function startPolling(): void {
     if (!workspaceLoaded) {
       if (countBlocks(blocks) >= countBlocks(store.levels[store.current] ?? '')) {
         workspaceLoaded = true;
+        incoming = {};
         agreed = blocks;
         lastPolled = blocks;
         hideLoading();
@@ -1042,6 +1061,7 @@ function replaceProject(levels: Levels, shared: ProjectText): void {
     current: 'level1' in levels ? 'level1' : names[0],
     levelsEnabled: names.length > 1,
   };
+  incoming = { ...shared };
   editedHere = true;
   persist();
   pushStateToEveryone();
