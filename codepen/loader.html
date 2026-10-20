@@ -1,0 +1,26 @@
+<!-- Arcade Collab loader: paste this into W3Schools Tryit (or similar) and press Run. -->
+<script>
+(async () => {
+  const sources = [
+    // Always the latest version on GitHub.
+    'https://raw.githubusercontent.com/Maxey1950/studious-fishstick/refs/heads/claude/fresh-start-gvxmdy/codepen/dist/arcade-collab.html',
+    // The same page from jsDelivr, pinned to a known-good version, in case GitHub is blocked.
+    'https://cdn.jsdelivr.net/gh/Maxey1950/studious-fishstick@65ec36558b38b32994f665a861d450e98fbd7b7d/codepen/dist/arcade-collab.html',
+  ];
+  for (const source of sources) {
+    try {
+      const response = await fetch(source, { cache: 'no-store' });
+      if (response.ok) {
+        const page = await response.text();
+        document.open();
+        document.write(page);
+        document.close();
+        return;
+      }
+    } catch (error) {
+      // Try the next source.
+    }
+  }
+  document.body.textContent = 'Could not download Arcade Collab: GitHub and jsDelivr both failed.';
+})();
+</script>
