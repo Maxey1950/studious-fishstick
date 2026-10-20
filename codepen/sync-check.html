@@ -1,0 +1,85 @@
+<!-- Paste into W3Schools Tryit and press Run. Tests which live-sync routes your network allows. -->
+<style>body{font:15px system-ui,sans-serif;margin:16px}td,th{padding:4px 10px;text-align:left}.ok{color:#1a7f37;font-weight:700}.bad{color:#cf222e;font-weight:700}.wait{color:#888}</style>
+<h3>1. Which sync routes get through?</h3>
+<table id="t"><tr><th>Route</th><th>Port</th><th>Result</th></tr></table>
+<p id="done" class="wait">Testing... (about 8 seconds)</p>
+<h3>2. Can two school computers connect directly?</h3>
+<p>Both open this page. One clicks <b>Get my code</b> and tells the other the code. The other types it in and clicks <b>Connect</b>.</p>
+<p><button id="mine">Get my code</button> <span id="code" style="font:700 20px monospace"></span></p>
+<p><input id="theirs" placeholder="Friend's code" style="font:16px monospace;width:9em"> <button id="go">Connect</button></p>
+<p id="pair" class="wait"></p>
+<script>
+const id = Math.random().toString(36).slice(2);
+const routes = [
+  ['WebSocket echo (protocol check)', 'wss://echo.websocket.org', []],
+  ['PeerJS (direct browser-to-browser)', `wss://0.peerjs.com/peerjs?key=peerjs&id=${id}&token=${id}`, []],
+  ['ntfy.sh (small messages)', `wss://ntfy.sh/arcade-collab-check-${id}/ws`, []],
+  ['HiveMQ MQTT broker', 'wss://broker.hivemq.com:8884/mqtt', ['mqtt']],
+  ['EMQX MQTT broker', 'wss://broker.emqx.io:8084/mqtt', ['mqtt']],
+  ['Mosquitto MQTT broker', 'wss://test.mosquitto.org:8081', ['mqtt']],
+];
+const table = document.getElementById('t');
+let pending = routes.length;
+for (const [name, url, protocols] of routes) {
+  const row = table.insertRow();
+  row.insertCell().textContent = name;
+  row.insertCell().textContent = new URL(url).port || '443';
+  const cell = row.insertCell();
+  cell.textContent = 'testing...'; cell.className = 'wait';
+  let settled = false;
+  const finish = (ok, why) => {
+    if (settled) return; settled = true;
+    cell.textContent = ok ? 'WORKS' : `BLOCKED (${why})`;
+    cell.className = ok ? 'ok' : 'bad';
+    if (--pending === 0) document.getElementById('done').textContent = 'Done. Send a screenshot of this table.';
+  };
+  let ws;
+  try { ws = new WebSocket(url, protocols); } catch (e) { finish(false, 'refused'); continue; }
+  const timer = setTimeout(() => { finish(false, 'timed out'); try { ws.close(); } catch {} }, 8000);
+  ws.onopen = () => { clearTimeout(timer); finish(true); ws.close(); };
+  ws.onerror = () => { clearTimeout(timer); finish(false, 'error'); };
+}
+
+// --- Two-computer test, through PeerJS's free introduction server ---
+const pairEl = document.getElementById('pair');
+const say = (text, cls) => { pairEl.textContent = text; pairEl.className = cls || 'wait'; };
+function loadPeerJs() {
+  if (window.Peer) return Promise.resolve();
+  const urls = ['https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js',
+                'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js'];
+  return urls.reduce((p, url) => p.catch(() => new Promise((ok, fail) => {
+    const s = document.createElement('script'); s.src = url; s.onload = ok; s.onerror = fail; document.head.appendChild(s);
+  })), Promise.reject()).catch(() => { throw new Error('could not download PeerJS (jsDelivr and cdnjs both failed)'); });
+}
+let peer;
+async function makePeer() {
+  if (peer) return peer;
+  await loadPeerJs();
+  const code = 'arc' + Math.floor(100000 + Math.random() * 900000);
+  peer = new Peer(code);
+  await new Promise((ok, fail) => { peer.on('open', ok); peer.on('error', (e) => fail(new Error(e.type || e.message))); });
+  peer.on('connection', (conn) => {
+    conn.on('data', (d) => { if (d === 'hello') { conn.send('hello back'); say('CONNECTED: your friend reached you directly. Live sync can work this way!', 'ok'); } });
+  });
+  return peer;
+}
+document.getElementById('mine').onclick = async () => {
+  say('Getting a code...');
+  try { const p = await makePeer(); document.getElementById('code').textContent = p.id; say('Tell your friend this code, then wait here.'); }
+  catch (e) { say('FAILED: ' + e.message, 'bad'); }
+};
+document.getElementById('go').onclick = async () => {
+  const theirs = document.getElementById('theirs').value.trim();
+  if (!theirs) return;
+  say('Connecting... (up to 20 seconds)');
+  try {
+    const p = await makePeer();
+    const conn = p.connect(theirs, { reliable: true });
+    const timer = setTimeout(() => say('FAILED: no direct connection after 20 seconds. The network blocks computer-to-computer links.', 'bad'), 20000);
+    conn.on('open', () => conn.send('hello'));
+    conn.on('data', (d) => { if (d === 'hello back') { clearTimeout(timer); say('CONNECTED: direct link works. Live sync can work this way!', 'ok'); } });
+    conn.on('error', (e) => { clearTimeout(timer); say('FAILED: ' + (e.type || e.message), 'bad'); });
+    p.on('error', (e) => { clearTimeout(timer); say('FAILED: ' + (e.type || e.message), 'bad'); });
+  } catch (e) { say('FAILED: ' + e.message, 'bad'); }
+};
+</script>
