@@ -171,7 +171,8 @@
     "arcade:refresh": "node scripts/fetchArcade.mjs && node scripts/generateArcadeBlocks.mjs",
     "probe:embed": "node probe/serve.mjs",
     "test:collab": "node collab/test/syncState.test.mjs && node collab/test/arcadeProtocol.test.mjs",
-    "vsix": "npm run compile && vsce package --no-dependencies"
+    "vsix": "npm run compile && vsce package --no-dependencies",
+    "codepen": "node codepen/build.mjs"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",

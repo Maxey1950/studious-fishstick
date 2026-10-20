@@ -1,0 +1,170 @@
+<meta charset="utf-8">
+<!--
+  Arcade Collab &mdash; paste this whole file into CodePen's HTML panel.
+  Built from codepen/main.ts by `npm run codepen`; edit the source, not the output.
+-->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e2e; }
+  #app { display: flex; flex-direction: column; height: 100vh; font: 13px/1.4 system-ui, sans-serif; }
+  [hidden] { display: none !important; }
+
+  /* Toolbar */
+  #bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 6px 10px; background: #2b2b40; color: #f0f0f6;
+  }
+  #bar strong { margin-right: 6px; }
+  #level-controls { display: inline-flex; align-items: center; gap: 8px; }
+  button, select, input {
+    font: inherit; color: #f0f0f6; background: #3c3c58;
+    border: 1px solid #55557a; border-radius: 4px; padding: 3px 8px;
+  }
+  button { cursor: pointer; }
+  button:hover { background: #4a4a6c; }
+  #status { margin-left: auto; opacity: .8; }
+
+  /* Editor and its loading screen */
+  #stage { position: relative; flex: 1; }
+  #editor { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+  #loading {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #1e1e2e; color: #f0f0f6; font: 600 22px system-ui, sans-serif;
+  }
+
+  /* Setup */
+  #setup {
+    position: fixed; inset: 0; z-index: 10; overflow-y: auto;
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: 32px 16px; background: rgba(20, 20, 32, .97); color: #f0f0f6;
+    font: 14px/1.5 system-ui, sans-serif;
+  }
+  .card { width: 100%; max-width: 560px; background: #2b2b40; border-radius: 12px; padding: 24px 28px; }
+  .card h1 { margin: 0; font-size: 24px; }
+  .sub { margin: 4px 0 18px; opacity: .75; }
+  .card section { border-top: 1px solid #44445f; padding: 16px 0; }
+  .card h2 { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 16px; }
+  .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%; background: #7b5cff; font-size: 13px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .card button { padding: 6px 12px; }
+  .hint { opacity: .7; font-size: 13px; margin: 6px 0; }
+  .card input[type=text], .card input:not([type]) { padding: 6px 8px; width: 100%; box-sizing: border-box; margin-top: 6px; }
+
+  /* The on/off switch */
+  .toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600; }
+  .toggle input { display: none; }
+  .slider { position: relative; width: 42px; height: 24px; border-radius: 12px; background: #55557a; transition: background .15s; flex: none; }
+  .slider::after {
+    content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+    border-radius: 50%; background: #fff; transition: transform .15s;
+  }
+  .toggle input:checked + .slider { background: #4cbb6c; }
+  .toggle input:checked + .slider::after { transform: translateX(18px); }
+
+  /* Levels */
+  .stepper { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; }
+  .stepper button { width: 32px; padding: 4px 0; font-weight: 700; }
+  #lv-count { min-width: 2ch; text-align: center; font-size: 18px; font-weight: 700; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 6px 0 12px; }
+  .chip {
+    padding: 3px 8px; border-radius: 6px; background: #3c3c58; font-size: 12px; font-weight: 600;
+    position: relative;
+  }
+  .chip.first { background: #4cbb6c; }
+  .chip:not(:last-child)::after { content: '\2192'; position: absolute; right: -13px; opacity: .5; }
+  .howto { background: #232336; border-radius: 8px; padding: 10px 12px; }
+  .howto p { margin: 4px 0; }
+  /* A picture of the MakeCode block to use, in its own colours */
+  .mc-block {
+    display: inline-flex; align-items: center; gap: 8px; margin: 6px 0;
+    padding: 6px 12px 6px 10px; border-radius: 6px; background: #002050;
+    font: 600 14px/1 system-ui, sans-serif; color: #fff; box-shadow: 0 2px 0 #001330;
+  }
+  .mc-text { padding: 3px 8px; border-radius: 12px; background: #fff; color: #333; font-weight: 500; }
+  code { background: #3c3c58; padding: 1px 5px; border-radius: 4px; }
+
+  /* Play together */
+  .choice { display: flex; align-items: center; gap: 8px; margin: 4px 0; cursor: pointer; }
+  .primary {
+    margin-top: 8px; width: 100%; padding: 10px !important; font-size: 16px; font-weight: 700;
+    background: #7b5cff !important; border-color: #9a82ff !important;
+  }
+  .primary:hover { background: #8d72ff !important; }
+</style>
+
+<div id="app">
+  <div id="bar">
+    <strong>Arcade Collab</strong>
+    <span id="level-controls">
+      <label>Level <select id="level"></select></label>
+      <button id="add-level" title="Add an empty level">+ Level</button>
+    </span>
+    <button id="export" title="Download the whole project">Export</button>
+    <button id="open-setup" title="Project, levels and collaboration">&#9881; Setup</button>
+    <span id="status"></span>
+  </div>
+  <div id="stage">
+    <iframe id="editor" allow="usb; autoplay; camera; microphone"></iframe>
+    <div id="loading" hidden><div id="loading-text">Loading&hellip;</div></div>
+  </div>
+</div>
+
+<div id="setup" hidden>
+  <div class="card">
+    <h1>Arcade Collab</h1>
+    <p class="sub">MakeCode Arcade, together. Set things up, then start the editor.</p>
+
+    <section>
+      <h2><span class="num">1</span> Project</h2>
+      <p id="project-summary"></p>
+      <div class="row">
+        <button id="setup-new">Start fresh</button>
+        <button id="setup-import" title="A folder of level1.blocks, level2.blocks&hellip; and its assets">Import folder&hellip;</button>
+        <button id="setup-backup" title="A file made with Export">Open backup&hellip;</button>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">2</span> Levels</h2>
+      <label class="toggle">
+        <input type="checkbox" id="levels-on"><span class="slider"></span>
+        Split the game into levels
+      </label>
+      <p class="hint">Only one level is loaded at a time, so a big game fits in the computer's memory.</p>
+      <div id="levels-detail">
+        <div class="stepper">
+          How many levels?
+          <button id="lv-minus" title="Fewer">&minus;</button>
+          <span id="lv-count">10</span>
+          <button id="lv-plus" title="More">+</button>
+        </div>
+        <div id="lv-chips" class="chips"></div>
+        <div class="howto">
+          <p><b>Moving to the next level:</b> put this block at the end of a level, after the loading cutscene:</p>
+          <div class="mc-block">console log <span class="mc-text">@next</span></div>
+          <p class="hint">Or jump to a particular level with <code>@level level4</code>. Search the toolbox for &ldquo;console log&rdquo; to find the block.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">3</span> Play together</h2>
+      <label class="choice"><input type="radio" name="mode" value="tabs"> Just this computer <span class="hint">&mdash; tabs in this browser</span></label>
+      <label class="choice"><input type="radio" name="mode" value="relay"> Online with friends <span class="hint">&mdash; needs a relay server</span></label>
+      <input id="relay-url" placeholder="Relay address, e.g. wss://your-relay.example">
+      <label style="display:block;margin-top:10px">Room name <input id="setup-room"></label>
+      <p class="hint">Everyone who uses the same room name edits together.</p>
+    </section>
+
+    <button id="setup-start" class="primary">Start editing &rarr;</button>
+  </div>
+</div>
+
+<input type="file" id="folder-input" webkitdirectory multiple hidden>
+<input type="file" id="backup-input" accept=".json,application/json" hidden>
+
+<script>
+/*__SCRIPT__*/
+</script>
