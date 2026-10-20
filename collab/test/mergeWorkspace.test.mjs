@@ -329,3 +329,103 @@ test('identical blocks in different places are both kept', () => {
   assert.deepEqual(disposed, []);
   assert.equal(workspace.blocks.length, 2);
 });
+
+/**
+ * The real Blockly, as far as positions go: blockToDom leaves x and y out,
+ * blockToDomWithXY puts them in, domToBlock builds at the origin, and blocks
+ * know where they are and can be moved.
+ */
+function positionedHarness(xml) {
+  const built = [];
+  const disposed = [];
+  const strip = (element) => {
+    const copy = element.cloneNode(true);
+    copy.removeAttribute('x');
+    copy.removeAttribute('y');
+    return copy;
+  };
+  const make = (element, x, y) => ({
+    id: element.getAttribute('id'),
+    element: strip(element),
+    x,
+    y,
+    getRelativeToSurfaceXY() {
+      return { x: this.x, y: this.y };
+    },
+    moveBy(dx, dy) {
+      this.x += dx;
+      this.y += dy;
+    },
+    dispose() {
+      disposed.push(this);
+      workspace.blocks = workspace.blocks.filter((block) => block !== this);
+    },
+  });
+  const workspace = {
+    RTL: false,
+    blocks: Array.from(parse(xml).children)
+      .filter((child) => child.tagName.toLowerCase() === 'block')
+      .map((element) => make(element, Number(element.getAttribute('x')), Number(element.getAttribute('y')))),
+    getTopBlocks: () => [...workspace.blocks],
+  };
+  const Blockly = {
+    Xml: {
+      blockToDom: (block) => block.element.cloneNode(true),
+      blockToDomWithXY: (block) => {
+        const element = block.element.cloneNode(true);
+        element.setAttribute('x', String(block.x));
+        element.setAttribute('y', String(block.y));
+        return element;
+      },
+      domToBlock: (element) => {
+        built.push(element);
+        const block = make(element, 0, 0);
+        workspace.blocks.push(block);
+        return block;
+      },
+      domToVariables: () => {},
+    },
+  };
+  const at = (id) => {
+    const block = workspace.blocks.find((b) => b.id === id);
+    return block && [block.x, block.y];
+  };
+  return { Blockly, workspace, built, disposed, at };
+}
+
+test('with real positions, blocks nobody touched are left standing', () => {
+  const xml = XML(BLOCK('a', 'a-1', 40), BLOCK('b', 'b-1', 300));
+  const { Blockly, workspace, built, disposed } = positionedHarness(xml);
+  mergeIntoWorkspace(Blockly, workspace, parse(xml), baseIndexOf(xml));
+  assert.deepEqual(built, []);
+  assert.deepEqual(disposed, []);
+});
+
+test('a block someone else added lands where they put it', () => {
+  const before = XML(BLOCK('a', 'a-1', 40));
+  const after = XML(BLOCK('a', 'a-1', 40), '<block type="b" id="b-1" x="420" y="260"/>');
+  const { Blockly, workspace, at } = positionedHarness(before);
+  mergeIntoWorkspace(Blockly, workspace, parse(after), baseIndexOf(before));
+  assert.deepEqual(at('b-1'), [420, 260]);
+  assert.deepEqual(at('a-1'), [0, 40]);
+});
+
+test('a block someone else moved is moved here, not rebuilt', () => {
+  const before = XML('<block type="a" id="a-1" x="10" y="20"/>');
+  const after = XML('<block type="a" id="a-1" x="500" y="330"/>');
+  const { Blockly, workspace, built, disposed, at } = positionedHarness(before);
+  const touched = [];
+  mergeIntoWorkspace(Blockly, workspace, parse(after), baseIndexOf(before), touched);
+  assert.deepEqual(at('a-1'), [500, 330]);
+  assert.deepEqual(built, []);
+  assert.deepEqual(disposed, []);
+  assert.deepEqual(touched, ['a-1']);
+});
+
+test('a changed block is rebuilt where it was put', () => {
+  const before = XML('<block type="a" id="a-1" x="10" y="20"><field name="N">1</field></block>');
+  const after = XML('<block type="a" id="a-1" x="210" y="90"><field name="N">2</field></block>');
+  const { Blockly, workspace, at } = positionedHarness(before);
+  mergeIntoWorkspace(Blockly, workspace, parse(after), baseIndexOf(before));
+  assert.deepEqual(at('a-1'), [210, 90]);
+});

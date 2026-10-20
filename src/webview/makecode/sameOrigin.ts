@@ -1195,9 +1195,13 @@ export function mergeIntoWorkspace(
       continue;
     }
     unmatched.delete(current.id);
-    if (canonicalize(Blockly.Xml.blockToDom(current)) !== canonicalize(element)) {
+    if (canonicalize(topDom(Blockly, current), false, true) !== canonicalize(element, false, true)) {
       current.dispose(false);
       rebuild.push(element);
+    } else if (canonicalize(topDom(Blockly, current)) !== canonicalize(element)) {
+      // Only moved: moved here too, and pointed out like any other change.
+      placeAt(workspace, current, element);
+      touched?.push(current.id);
     }
     // Otherwise unchanged: leaving it alone is what keeps the canvas still.
   }
@@ -1206,7 +1210,7 @@ export function mergeIntoWorkspace(
   // not know. An exact content match is the same block by another name.
   const remaining = new Map<string, any[]>();
   for (const block of unmatched.values()) {
-    const key = canonicalize(Blockly.Xml.blockToDom(block), true);
+    const key = canonicalize(topDom(Blockly, block), true, true);
     const bucket = remaining.get(key);
     if (bucket) {
       bucket.push(block);
@@ -1216,10 +1220,11 @@ export function mergeIntoWorkspace(
   }
 
   for (const element of byContent) {
-    const bucket = remaining.get(canonicalize(element, true));
+    const bucket = remaining.get(canonicalize(element, true, true));
     const match = bucket?.shift();
     if (match) {
       unmatched.delete(match.id);
+      placeAt(workspace, match, element);
     } else {
       rebuild.push(element);
     }
@@ -1246,6 +1251,13 @@ export function mergeIntoWorkspace(
 
   for (const element of rebuild) {
     const block = Blockly.Xml.domToBlock(element, workspace);
+    // domToBlock builds a block but leaves it at the origin — only loading a
+    // whole workspace reads x and y — so everything that arrived from someone
+    // else piled up in the top corner, and their copy of it was sent back that
+    // way, moving it for everyone.
+    if (block) {
+      placeAt(workspace, block, element);
+    }
     // Worth pointing out on screen: this is what somebody else just did, and
     // otherwise it simply appears with nothing to say where it came from.
     if (touched && block?.id) {
@@ -1297,7 +1309,7 @@ export function baseIndexOf(xml: string): BaseIndex | undefined {
     if (id) {
       ids.add(id);
     }
-    contents.add(canonicalize(child, true));
+    contents.add(canonicalize(child, true, true));
   }
   return { ids, contents };
 }
@@ -1308,7 +1320,7 @@ function existedAtBase(base: BaseIndex, Blockly: any, block: any): boolean {
     if (base.ids.has(block.id)) {
       return true;
     }
-    return base.contents.has(canonicalize(Blockly.Xml.blockToDom(block), true));
+    return base.contents.has(canonicalize(topDom(Blockly, block), true, true));
   } catch {
     // Unreadable: treat it as pre-existing, since the cost of being wrong that
     // way is a block that lingers, and the other way is a block destroyed.
@@ -1328,12 +1340,48 @@ function existedAtBase(base: BaseIndex, Blockly: any, block: any): boolean {
  * Position is part of the comparison, so two genuinely identical blocks side by
  * side are left alone.
  */
+/**
+ * A top-level block as XML, with where it sits.
+ *
+ * Blockly's blockToDom leaves the position out, while the incoming XML always
+ * has one — so compared that way, every block on the canvas looked changed and
+ * was torn down and rebuilt on every change anyone made.
+ */
+function topDom(Blockly: any, block: any): Element {
+  return typeof Blockly.Xml.blockToDomWithXY === 'function'
+    ? Blockly.Xml.blockToDomWithXY(block)
+    : Blockly.Xml.blockToDom(block);
+}
+
+/** Moves a top-level block to where an incoming element says it is. */
+function placeAt(workspace: any, block: any, element: Element): void {
+  if (!element.hasAttribute('x') || typeof block.moveBy !== 'function') {
+    return;
+  }
+  const x = Number(element.getAttribute('x'));
+  const y = Number(element.getAttribute('y'));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return;
+  }
+  try {
+    const at = block.getRelativeToSurfaceXY();
+    // XML records right-to-left positions mirrored.
+    const dx = (workspace.RTL ? -x : x) - at.x;
+    const dy = y - at.y;
+    if (Math.round(dx) || Math.round(dy)) {
+      block.moveBy(dx, dy);
+    }
+  } catch {
+    // A block that cannot say where it is stays where it is.
+  }
+}
+
 function dropStackedDuplicates(Blockly: any, workspace: any): void {
   const seen = new Set<string>();
   for (const block of workspace.getTopBlocks(false)) {
     let key: string;
     try {
-      key = canonicalize(Blockly.Xml.blockToDom(block), true);
+      key = canonicalize(topDom(Blockly, block), true);
     } catch {
       continue;
     }
@@ -1357,9 +1405,10 @@ function dropStackedDuplicates(Blockly: any, workspace: any): void {
  * `ignoreId` drops the id, for comparing a block against an incoming element
  * that carries none.
  */
-function canonicalize(element: Element, ignoreId = false): string {
+function canonicalize(element: Element, ignoreId = false, ignorePosition = false): string {
   const attributes = Array.from(element.attributes)
     .filter((attribute) => !(ignoreId && attribute.name === 'id'))
+    .filter((attribute) => !(ignorePosition && (attribute.name === 'x' || attribute.name === 'y')))
     .map((attribute) => {
       const value =
         attribute.name === 'x' || attribute.name === 'y'
