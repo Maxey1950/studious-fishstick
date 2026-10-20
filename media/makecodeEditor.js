@@ -397,6 +397,11 @@
         shell.isControllerMode = function () { return true; };
         shell.isSandboxMode = function () { return false; };
         shell.isReadOnly = function () { return false; };
+        // The root element's layout class comes from the same URL sniffing,
+        // which saw an iframe with no ?controller=1 and settled on "sandbox".
+        // MakeCode's stylesheet hides #simulator under .sandbox, so the
+        // simulator ran but was never shown.
+        shell.layoutTypeClass = function () { return 'controller'; };
       } catch (e) {}
       clearInterval(timer);
     } else if (Date.now() - started > 15000) {
