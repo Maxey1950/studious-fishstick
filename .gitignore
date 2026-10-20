@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# The CodePen page is the deliverable people copy or load, so it is kept.
+!codepen/dist/
 media/vendor/
 media/blocksEditor.js
 media/blocksEditor.js.map

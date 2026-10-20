@@ -1,0 +1,350 @@
+<meta charset="utf-8">
+<!--
+  Arcade Collab &mdash; paste this whole file into CodePen's HTML panel.
+  Built from codepen/main.ts by `npm run codepen`; edit the source, not the output.
+-->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e2e; }
+  #app { display: flex; flex-direction: column; height: 100vh; font: 13px/1.4 system-ui, sans-serif; }
+  [hidden] { display: none !important; }
+
+  /* Toolbar */
+  #bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 6px 10px; background: #2b2b40; color: #f0f0f6;
+  }
+  #bar strong { margin-right: 6px; }
+  #level-controls { display: inline-flex; align-items: center; gap: 8px; }
+  button, select, input {
+    font: inherit; color: #f0f0f6; background: #3c3c58;
+    border: 1px solid #55557a; border-radius: 4px; padding: 3px 8px;
+  }
+  button { cursor: pointer; }
+  button:hover { background: #4a4a6c; }
+  #status { margin-left: auto; opacity: .8; }
+
+  /* Editor and its loading screen */
+  #stage { position: relative; flex: 1; }
+  #editor { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+  #loading {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #1e1e2e; color: #f0f0f6; font: 600 22px system-ui, sans-serif;
+  }
+
+  /* Setup */
+  #setup {
+    position: fixed; inset: 0; z-index: 10; overflow-y: auto;
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: 32px 16px; background: rgba(20, 20, 32, .97); color: #f0f0f6;
+    font: 14px/1.5 system-ui, sans-serif;
+  }
+  .card { width: 100%; max-width: 560px; background: #2b2b40; border-radius: 12px; padding: 24px 28px; }
+  .card h1 { margin: 0; font-size: 24px; }
+  .sub { margin: 4px 0 18px; opacity: .75; }
+  .card section { border-top: 1px solid #44445f; padding: 16px 0; }
+  .card h2 { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 16px; }
+  .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%; background: #7b5cff; font-size: 13px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .card button { padding: 6px 12px; }
+  .hint { opacity: .7; font-size: 13px; margin: 6px 0; }
+  .card input[type=text], .card input:not([type]) { padding: 6px 8px; width: 100%; box-sizing: border-box; margin-top: 6px; }
+
+  /* The on/off switch */
+  .toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600; }
+  .toggle input { display: none; }
+  .slider { position: relative; width: 42px; height: 24px; border-radius: 12px; background: #55557a; transition: background .15s; flex: none; }
+  .slider::after {
+    content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+    border-radius: 50%; background: #fff; transition: transform .15s;
+  }
+  .toggle input:checked + .slider { background: #4cbb6c; }
+  .toggle input:checked + .slider::after { transform: translateX(18px); }
+
+  /* Levels */
+  .stepper { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; }
+  .stepper button { width: 32px; padding: 4px 0; font-weight: 700; }
+  #lv-count { min-width: 2ch; text-align: center; font-size: 18px; font-weight: 700; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 6px 0 12px; }
+  .chip {
+    padding: 3px 8px; border-radius: 6px; background: #3c3c58; font-size: 12px; font-weight: 600;
+    position: relative;
+  }
+  .chip.first { background: #4cbb6c; }
+  .chip:not(:last-child)::after { content: '\2192'; position: absolute; right: -13px; opacity: .5; }
+  .howto { background: #232336; border-radius: 8px; padding: 10px 12px; }
+  .howto p { margin: 4px 0; }
+  /* A picture of the MakeCode block to use, in its own colours */
+  .mc-block {
+    display: inline-flex; align-items: center; gap: 8px; margin: 6px 0;
+    padding: 6px 12px 6px 10px; border-radius: 6px; background: #002050;
+    font: 600 14px/1 system-ui, sans-serif; color: #fff; box-shadow: 0 2px 0 #001330;
+  }
+  .mc-text { padding: 3px 8px; border-radius: 12px; background: #fff; color: #333; font-weight: 500; }
+  code { background: #3c3c58; padding: 1px 5px; border-radius: 4px; }
+
+  /* Play together */
+  .choice { display: flex; align-items: center; gap: 8px; margin: 4px 0; cursor: pointer; }
+  .primary {
+    margin-top: 8px; width: 100%; padding: 10px !important; font-size: 16px; font-weight: 700;
+    background: #7b5cff !important; border-color: #9a82ff !important;
+  }
+  .primary:hover { background: #8d72ff !important; }
+</style>
+
+<div id="app">
+  <div id="bar">
+    <strong>Arcade Collab</strong>
+    <span id="level-controls">
+      <label>Level <select id="level"></select></label>
+      <button id="add-level" title="Add an empty level">+ Level</button>
+    </span>
+    <button id="export" title="Download the whole project">Export</button>
+    <button id="open-setup" title="Project, levels and collaboration">&#9881; Setup</button>
+    <span id="status"></span>
+  </div>
+  <div id="stage">
+    <iframe id="editor" allow="usb; autoplay; camera; microphone"></iframe>
+    <div id="loading" hidden><div id="loading-text">Loading&hellip;</div></div>
+  </div>
+</div>
+
+<div id="setup" hidden>
+  <div class="card">
+    <h1>Arcade Collab</h1>
+    <p class="sub">MakeCode Arcade, together. Set things up, then start the editor.</p>
+
+    <section>
+      <h2><span class="num">1</span> Project</h2>
+      <p id="project-summary"></p>
+      <div class="row">
+        <button id="setup-new">Start fresh</button>
+        <button id="setup-import" title="A folder of level1.blocks, level2.blocks&hellip; and its assets">Import folder&hellip;</button>
+        <button id="setup-backup" title="A file made with Export">Open backup&hellip;</button>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">2</span> Levels</h2>
+      <label class="toggle">
+        <input type="checkbox" id="levels-on"><span class="slider"></span>
+        Split the game into levels
+      </label>
+      <p class="hint">Only one level is loaded at a time, so a big game fits in the computer's memory.</p>
+      <div id="levels-detail">
+        <div class="stepper">
+          How many levels?
+          <button id="lv-minus" title="Fewer">&minus;</button>
+          <span id="lv-count">10</span>
+          <button id="lv-plus" title="More">+</button>
+        </div>
+        <div id="lv-chips" class="chips"></div>
+        <div class="howto">
+          <p><b>Moving to the next level:</b> put this block at the end of a level, after the loading cutscene:</p>
+          <div class="mc-block">console log <span class="mc-text">@next</span></div>
+          <p class="hint">Or jump to a particular level with <code>@level level4</code>. Search the toolbox for &ldquo;console log&rdquo; to find the block.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">3</span> Play together</h2>
+      <label class="choice"><input type="radio" name="mode" value="tabs"> Just this computer <span class="hint">&mdash; tabs in this browser</span></label>
+      <label class="choice"><input type="radio" name="mode" value="relay"> Online with friends <span class="hint">&mdash; needs a relay server</span></label>
+      <input id="relay-url" placeholder="Relay address, e.g. wss://your-relay.example">
+      <label style="display:block;margin-top:10px">Room name <input id="setup-room"></label>
+      <p class="hint">Everyone who uses the same room name edits together.</p>
+    </section>
+
+    <button id="setup-start" class="primary">Start editing &rarr;</button>
+  </div>
+</div>
+
+<input type="file" id="folder-input" webkitdirectory multiple hidden>
+<input type="file" id="backup-input" accept=".json,application/json" hidden>
+
+<script>
+"use strict";(()=>{var lt=new Set(["main.blocks","_history",".simstate.json"]);function $(e){return!lt.has(e)}function be(e){let t={};for(let[r,n]of Object.entries(e))$(r)&&typeof n=="string"&&(t[r]=n);return t}function ve(e,t){let r={};for(let[n,o]of Object.entries(t)){if(!$(n))continue;let s=e[n];o===s||dt(o)||(r[n]=o)}return r}function dt(e){return e===void 0||e.trim()===""}function xe(e,t){let r={...e.text};for(let[n,o]of Object.entries(t))$(n)&&(r[n]=o);return{...e,text:r}}function q(e){let t=e.text["pxt.json"];if(t===void 0)return e;let r;try{r=JSON.parse(t).files}catch{return e}if(!Array.isArray(r))return e;let n={...e.text},o=!1;for(let s of r){let a=String(s);n[a]===void 0&&(n[a]=ut(a),o=!0)}return o?{...e,text:n}:e}function ut(e){return/\.(jres|json)$/i.test(e)?"{}":""}var ie="https://arcade.makecode.com/?controller=1&ws=iframe&nocookiebanner=1";function le(e){return!/<block\b/i.test(e)}function we(e,t){if(!e||typeof e!="object"||e.type!=="pxthost")return{kind:"ignore"};switch(e.action){case"workspacesync":return{kind:"reply",message:{type:"pxthost",id:e.id,success:!0,projects:[q(t)]}};case"newproject":return{kind:"reply",message:{type:"pxthost",id:e.id,success:!0,projects:[q(t)]}};case"workspacereset":return{kind:"reply",message:{type:"pxthost",id:e.id,success:!0}};case"workspacesave":return e.project?.text?{kind:"projectChanged",project:e.project}:{kind:"ignore"};case"workspaceloaded":case"editorcontentloaded":return{kind:"status",status:"ready"};default:return{kind:"ignore"}}}function Ee(e){return{type:"pxteditor",action:"importproject",project:q(e)}}function je(e){return{type:"pxteditor",action:e}}function Se(e,t){return{header:{name:e,id:`collab-${e}`,editor:"blocksprj",pubId:"",pubCurrent:!1,target:"arcade",recentUse:Date.now(),modificationTime:Date.now(),path:e,cloudUserId:null,cloudCurrent:!1,cloudVersion:null,cloudLastSyncTime:0,isDeleted:!1},text:{"main.blocks":t,"main.ts":" ","pxt.json":JSON.stringify({name:e,description:"",dependencies:{device:"*"},files:["main.blocks","main.ts"]},null,2)}}}function Te(e){return e.text["main.blocks"]??""}function de(e){return(e.match(/<block[\s>]/g)??[]).length}function Le(e,t){if(e===t)return!0;let r=Me(e),n=Me(t);return r!==void 0&&r===n}function Me(e){try{let t=new DOMParser().parseFromString(e,"text/xml");return t.getElementsByTagName("parsererror").length?void 0:Be(t.documentElement)}catch{return}}function Be(e){let t=Array.from(e.attributes).map(n=>{let o=n.name==="x"||n.name==="y"?String(Math.round(Number(n.value)||0)):n.value;return`${n.name}=${o}`}).sort().join(" "),r=Array.from(e.childNodes).map(n=>{if(n.nodeType===1)return Be(n);if(n.nodeType===3){let o=(n.textContent??"").replace(/^\s+|\s+$/g,"");return o?`#${o}`:""}return""}).filter(Boolean).join("");return`<${e.tagName.toLowerCase()} ${t}>${r}`}var J={sendDebounceMs:100,applyAfterIdleMs:150},Y=class Y{constructor(t=J){this.options=t;this.state={lastLocalChangeMs:Number.NEGATIVE_INFINITY,sentHistory:[]}}onLocalChange(t,r){if(t===this.state.appliedRemote){this.state.local=t;return}this.state.local=t,this.state.lastLocalChangeMs=r,this.state.lastLocalUnsentMs=t===this.state.sent?void 0:r,this.state.pendingRemote=void 0}onRemoteChange(t,r){t===this.state.local||this.state.sentHistory.includes(t)||(this.state.pendingRemote=t)}next(t){let{sendDebounceMs:r,applyAfterIdleMs:n}=this.options;if(this.state.lastLocalUnsentMs!==void 0&&this.state.local!==void 0){let o=this.state.lastLocalUnsentMs+r;if(t>=o){let s=this.state.local;return this.state.sent=s,this.remember(s),this.state.lastLocalUnsentMs=void 0,{kind:"broadcast",blocks:s}}return{kind:"wait",untilMs:o}}if(this.state.pendingRemote!==void 0){let o=this.state.lastLocalChangeMs+n;if(t>=o){let s=this.state.pendingRemote;return this.state.pendingRemote=void 0,this.state.appliedRemote=s,this.state.sent=s,this.remember(s),{kind:"apply",blocks:s}}return{kind:"wait",untilMs:o}}}remember(t){this.state.sentHistory.push(t),this.state.sentHistory.length>Y.HISTORY&&this.state.sentHistory.shift()}hasPendingRemote(){return this.state.pendingRemote!==void 0}};Y.HISTORY=24;var R=Y;async function Oe(e){let t=await fetch(ie,{credentials:"omit"});if(!t.ok)throw new Error(`MakeCode returned ${t.status}`);let r=await t.text(),n=new URL(ie).origin,o=r.replace(/"\/---/g,`"${n}/---`),s=e?o.replace(/<iframe(\s)/gi,"<iframe credentialless$1"):o,l=(e?mt(s):s).replace(/<head([^>]*)>/i,`<head$1><base href="${n}/">${ft()}${pt}${e?ht:""}${yt}`);if(!l.includes("<base"))throw new Error("could not find a <head> to anchor the editor\u2019s asset paths");return URL.createObjectURL(new Blob([l],{type:"text/html"}))}function ft(){return`<script>(function () {
+  var started = Date.now();
+
+  // Catch the workspace as it is created. MakeCode bundles Blockly as a webpack
+  // module, so the global object does not answer getMainWorkspace and there is
+  // no registry to ask afterwards \u2014 but whatever creates the canvas has to call
+  // inject, and wrapping that captures the workspace it returns.
+  //
+  // In the shipped build the real Blockly never reaches the window at all: what
+  // is there is a stub carrying only Msg. So this is a best effort, and the
+  // route below is the one that works.
+  var injectTimer = setInterval(function () {
+    var B = window.Blockly;
+    if (B && B.inject && !B.__arcadeWrapped) {
+      try {
+        var nativeInject = B.inject;
+        B.inject = function () {
+          var workspace = nativeInject.apply(this, arguments);
+          try {
+            window.__arcadeWorkspace = workspace;
+            window.__arcadeBlockly = this || B;
+          } catch (e) {}
+          return workspace;
+        };
+        B.__arcadeWrapped = true;
+      } catch (e) {}
+      clearInterval(injectTimer);
+    } else if (Date.now() - started > 15000) {
+      clearInterval(injectTimer);
+    }
+  }, 2);
+
+  // The route that actually reaches the editor.
+  //
+  // pxt.editor.initExtensionsAsync is a hook the target fills in and the editor
+  // calls once during startup, handing it the running ProjectView. That object
+  // owns the blocks editor, and the blocks editor owns the live Blockly
+  // workspace \u2014 so watching the hook being called gets us both, though neither
+  // is ever a global.
+  //
+  // Wrapping it once is not enough: the target assigns its own function onto
+  // pxt.editor during startup, which replaces any wrapper already sitting
+  // there. So the property itself is redefined \u2014 every assignment is caught and
+  // re-wrapped, and whatever the target sets is still what runs.
+  function watchHook(host, name) {
+    var native = host[name];
+    if (host['__arcade_' + name]) { return; }
+    var wrap = function (fn) {
+      if (typeof fn !== 'function' || fn.__arcadeWrapped) { return fn; }
+      var wrapped = function (opts) {
+        try { window.__arcadeOpts = opts; } catch (e) {}
+        return fn.apply(this, arguments);
+      };
+      wrapped.__arcadeWrapped = true;
+      return wrapped;
+    };
+    var current = wrap(native);
+    try {
+      Object.defineProperty(host, name, {
+        configurable: true,
+        enumerable: true,
+        get: function () { return current; },
+        set: function (value) { current = wrap(value); }
+      });
+      host['__arcade_' + name] = true;
+    } catch (e) {}
+  }
+
+  var editorTimer = setInterval(function () {
+    var editor = window.pxt && window.pxt.editor;
+    if (!editor) {
+      if (Date.now() - started > 15000) { clearInterval(editorTimer); }
+      return;
+    }
+    watchHook(editor, 'initExtensionsAsync');
+    watchHook(editor, 'initFieldExtensionsAsync');
+    clearInterval(editorTimer);
+  }, 2);
+
+  var timer = setInterval(function () {
+    var shell = window.pxt && window.pxt.shell;
+    if (shell) {
+      try {
+        shell.isControllerMode = function () { return true; };
+        shell.isSandboxMode = function () { return false; };
+        shell.isReadOnly = function () { return false; };
+      } catch (e) {}
+      clearInterval(timer);
+    } else if (Date.now() - started > 15000) {
+      clearInterval(timer);
+    }
+  }, 2);
+}());<\/script>`}var pt=`<script>(function () {
+  window.addEventListener('keydown', function (event) {
+    var save = (event.ctrlKey || event.metaKey) && !event.altKey &&
+      (event.key === 's' || event.key === 'S');
+    if (!save) { return; }
+    event.preventDefault();
+    event.stopPropagation();
+    try { parent.postMessage({ type: 'blocksEditorSave' }, '*'); } catch (e) {}
+  }, true);
+}());<\/script>`;function mt(e){return e.replace(/<(script|link)\s([^>]*(?:src|href)="https:\/\/[^"]*"[^>]*)>/gi,(t,r,n)=>/crossorigin/i.test(n)?t:`<${r} crossorigin="anonymous" ${n}>`)}var ht=`<script>(function () {
+  var create = document.createElement.bind(document);
+  document.createElement = function (tag) {
+    var element = create.apply(null, arguments);
+    try {
+      var name = String(tag).toLowerCase();
+      if (name === 'iframe') {
+        // Embeddable under a require-corp document, which the simulator's own
+        // origin does not claim to be.
+        element.credentialless = true;
+      } else if (name === 'script' || name === 'link' || name === 'img') {
+        // Fetched as CORS, which is the other way to satisfy that policy.
+        element.crossOrigin = 'anonymous';
+      }
+    } catch (e) {}
+    return element;
+  };
+
+  // React builds its images with the Image constructor rather than
+  // createElement, so the editor's logos go through here instead.
+  var NativeImage = window.Image;
+  if (NativeImage) {
+    window.Image = function () {
+      var image = new NativeImage(arguments[0], arguments[1]);
+      try { image.crossOrigin = 'anonymous'; } catch (e) {}
+      return image;
+    };
+    window.Image.prototype = NativeImage.prototype;
+  }
+}());<\/script>`,yt=`<script>(function () {
+  var Native = window.Worker;
+  if (!Native) { return; }
+
+  function bootstrap(href) {
+    return '(' + function (src) {
+      var nativeImport = self.importScripts.bind(self);
+
+      function rehost(url) {
+        var absolute = new URL(url, src).href;
+        if (new URL(absolute).origin === self.location.origin) {
+          return absolute;
+        }
+        var request = new XMLHttpRequest();
+        request.open('GET', absolute, false);
+        request.send(null);
+        if (request.status >= 400) {
+          throw new Error('could not load ' + absolute + ' (' + request.status + ')');
+        }
+        return URL.createObjectURL(
+          new Blob([request.responseText], { type: 'application/javascript' })
+        );
+      }
+
+      self.importScripts = function () {
+        return nativeImport.apply(null, [].map.call(arguments, rehost));
+      };
+
+      self.importScripts(src);
+    }.toString() + ')(' + JSON.stringify(href) + ');';
+  }
+
+  window.Worker = function (url, options) {
+    var href = new URL(url, document.baseURI).href;
+    if (new URL(href).origin === location.origin) {
+      return new Native(url, options);
+    }
+    var blob = new Blob([bootstrap(href)], { type: 'application/javascript' });
+    return new Native(URL.createObjectURL(blob), options);
+  };
+  window.Worker.prototype = Native.prototype;
+}());<\/script>`;function K(e,t){if(e.__arcadeNamespace?.Xml)return e.__arcadeNamespace;let r=e.__arcadeBlockly??e.Blockly;if(r?.Xml)return r;for(let o of[()=>e.pxt?.blocks?.requireBlockly?.(),()=>e.pxt?.blocks?.requirePxtBlockly?.(),()=>t?.options?.Blockly,()=>t?.Blockly,()=>t?.constructor?.Blockly])try{let s=o();if(s?.Xml)return s}catch{}if(e.__arcadeNamespaceSearched)return r;let n=Ie(e,t);try{e.__arcadeNamespaceSearched=!0}catch{}if(n){try{e.__arcadeNamespace=n}catch{}return n}return r}function gt(e){try{return!!(e&&e.Xml&&typeof e.Xml.domToText=="function"&&typeof e.Xml.domToBlock=="function"&&e.Events&&typeof e.Events.disable=="function")}catch{return!1}}function Ie(e,t){let r=s=>gt(s)?s:void 0,n=new Set,o=s=>{if(!(!s||n.has(s)))return n.add(s),r(s)};for(let s of[e.__arcadeOpts,e.pxt,e.pxtblockly,e.pxtblocks]){let a=G(s,4,o);if(a)return a}return G(t,2,o)}function _e(e){let t=e.contentWindow;try{t.document.title}catch{return{sameOrigin:!1,globals:[],detail:"cross-origin: only importproject is available, so changes reload the editor"}}let r=["Blockly","pxt","pxsim","pxtblockly"].filter(o=>t[o]!==void 0),n=kt(t);return{sameOrigin:!0,globals:r,workspace:n,detail:n?`same-origin, workspace reachable via ${ue}, xml=${!!K(t,n)?.Xml} (globals: ${r.join(", ")||"none"})`:`same-origin, no workspace \u2014 ${xt(t)}`}}function kt(e){let t=[["captured",()=>e.__arcadeWorkspace],["opts.blocksEditor",()=>e.__arcadeOpts?.projectView?.blocksEditor?.editor],["opts.editor",()=>e.__arcadeOpts?.projectView?.editor?.editor],["opts.workspace",()=>e.__arcadeOpts?.projectView?.blocksEditor?.workspace],["react",()=>Ae(e)],["Blockly.getMainWorkspace",()=>e.Blockly?.getMainWorkspace?.()],["Blockly.common",()=>e.Blockly?.common?.getMainWorkspace?.()],["Blockly.common.all",()=>e.Blockly?.common?.getAllWorkspaces?.()?.[0]],["Workspace.getAll",()=>e.Blockly?.Workspace?.getAll?.()?.[0]],["pxt.blocks",()=>e.pxt?.blocks?.getMainWorkspace?.()],["pxtblockly",()=>e.pxtblockly?.getMainWorkspace?.()],["pxt.editor",()=>e.pxt?.editor?.mainWorkspace]];for(let[r,n]of t)try{let o=n();if(S(o))return ue=r,o}catch{}return ue="scan",vt(e)}function Re(e,t){let r=e.__arcadeOpts,n=[["opts.blocksEditor.editor",()=>r?.projectView?.blocksEditor?.editor],["opts.editor.editor",()=>r?.projectView?.editor?.editor],["opts.blocksEditor.workspace",()=>r?.projectView?.blocksEditor?.workspace],["__arcadeWorkspace",()=>e.__arcadeWorkspace],["getMainWorkspace",()=>e.Blockly?.getMainWorkspace?.()],["pxt.blocks.getMainWorkspace",()=>e.pxt?.blocks?.getMainWorkspace?.()]],o,s="none",a=-1,l=[];for(let[p,k]of n){let f;try{f=k()}catch{continue}if(!S(f)||bt(f))continue;let i=0;try{i=f.getTopBlocks(!1).length}catch{continue}l.push(`${p}=${i}`),i>a&&(o=f,s=p,a=i)}return $e||($e=!0,console.log(`[blocks] workspaces \u2014 ${l.join(" ")||"none"} \u2192 using ${s}`)),o?(t.workspace=o,o):t.workspace}function bt(e){try{return!!(e.isFlyout||e.isMutator||e.internalIsFlyout||e.internalIsMutator)}catch{return!1}}var ue="none",$e=!1;function S(e){try{return!!(e&&typeof e.getAllBlocks=="function"&&typeof e.getTopBlocks=="function"&&typeof e.newBlock=="function")}catch{return!1}}function fe(e){try{return!!e&&typeof e=="object"&&e.window===e}catch{return!0}}function vt(e){let t=new Set,r=s=>{if(!(!s||t.has(s)||fe(s))){if(t.add(s),S(s))return s;for(let a of["mainWorkspace","workspace","ws"])try{if(S(s[a]))return s[a]}catch{}for(let a of["getMainWorkspace","getWorkspace"])try{let l=typeof s[a]=="function"?s[a]():void 0;if(S(l))return l}catch{}}},n=G(e.__arcadeOpts,4,r);if(n)return n;let o;try{o=Object.getOwnPropertyNames(e)}catch{return}for(let s of o){let a;try{a=e[s]}catch{continue}if(!a||typeof a!="object"&&typeof a!="function"||fe(a))continue;let l=r(a);if(l)return l;let p;try{p=Object.keys(a)}catch{continue}for(let k of p){let f;try{f=a[k]}catch{continue}if(!f||typeof f!="object"&&typeof f!="function")continue;let i=r(f);if(i)return i}}}function Ae(e){let t;try{t=e.document.querySelector(".injectionDiv")??e.document.querySelector(".blocklyWorkspace")??e.document.querySelector(".blocklySvg")}catch{return}if(!t)return;let r;try{let n=Object.keys(t).find(o=>o.startsWith("__reactFiber$")||o.startsWith("__reactInternalInstance$"));r=n?t[n]:void 0}catch{return}for(let n=0;r&&n<40;n++){let o=r.stateNode;for(let s of["editor","workspace","mainWorkspace"])try{if(S(o?.[s]))return o[s]}catch{}if(S(o))return o;try{r=r.return}catch{return}}}function G(e,t,r){if(!e||t<0||fe(e))return;let n=r(e);if(n)return n;if(t===0)return;let o;try{o=Object.keys(e)}catch{return}for(let s of o){let a;try{a=e[s]}catch{continue}if(!a||typeof a!="object"&&typeof a!="function")continue;let l=G(a,t-1,r);if(l)return l}}function xt(e){let t=[];try{t.push(`search=${e.location?.search||"(none)"}`)}catch{t.push("search=unreadable")}try{t.push(`canvas=${e.document.querySelectorAll(".injectionDiv").length}`),t.push(`blocks=${e.document.querySelectorAll(".blocklyDraggable").length}`)}catch{t.push("canvas=unreadable")}try{let n=Object.keys(e.Blockly??{});t.push(`blocklyKeys=${n.length}:${n.slice(0,8).join(",")||"none"}`),t.push(`Blockly=${typeof e.Blockly} xml=${!!K(e)?.Xml}`),t.push(`editorKeys=${Object.keys(e.pxt?.editor??{}).slice(0,8).join(",")||"none"}`)}catch{t.push("keys=unreadable")}let r=[["captured",()=>e.__arcadeWorkspace],["Blockly.inject",()=>e.Blockly?.inject],["Blockly.getMainWorkspace",()=>e.Blockly?.getMainWorkspace],["Blockly.common",()=>e.Blockly?.common?.getMainWorkspace],["Workspace.getAll",()=>e.Blockly?.Workspace?.getAll],["pxt.blocks",()=>e.pxt?.blocks?.getMainWorkspace],["pxt.editor",()=>e.pxt?.editor]].filter(([,n])=>{try{return!!n()}catch{return!1}}).map(([n])=>n);t.push(`routes=${r.join("/")||"none"}`);try{let n=e.__arcadeOpts;t.push(`opts=${n?Object.keys(n).slice(0,8).join(",")||"empty":"none"}`);let o=n?.projectView;t.push(`projectView=${o?Object.keys(o).slice(0,12).join(","):"none"}`);let s=o?.blocksEditor;t.push(`blocksEditor=${s?Object.keys(s).slice(0,12).join(","):"none"}`),t.push(`namespace=${!!Ie(e)}`),t.push(`react=${!!Ae(e)}`),t.push(`pxt=${Object.keys(e.pxt??{}).slice(0,14).join(",")||"none"}`),t.push(`pxtBlocks=${Object.keys(e.pxt?.blocks??{}).slice(0,14).join(",")||"none"}`)}catch{t.push("opts=unreadable")}return t.join(" ")}function pe(e){try{return!!e.workspace?.isDragging?.()}catch{return!1}}function Ce(e,t,r,n){let o=Re(t,e),s=K(t,o);if(!o||!s?.Xml)return{mode:"import",detail:o?"no Blockly.Xml":"no workspace",touched:[]};let a;try{a=s.utils.xml.textToDom(r)}catch(f){return{mode:"import",detail:`unparseable XML: ${A(f)}`,touched:[]}}s.Events.disable();let l,p=[];try{l=wt(s,o,a,n,p)}catch(f){l=`merge threw: ${A(f)}`}finally{s.Events.enable()}if(l===void 0)return{mode:"merge",detail:`${p.length} block(s) changed`,touched:p};let k={x:o.scrollX,y:o.scrollY,scale:o.scale};s.Events.disable();try{s.Xml.clearWorkspaceAndLoadFromXml(a,o)}catch(f){return{mode:"import",detail:`reload threw: ${A(f)}`,touched:[]}}finally{s.Events.enable()}return o.setScale?.(k.scale),o.scroll?.(k.x,k.y),{mode:"canvas",detail:l,touched:[]}}function A(e){return e instanceof Error?`${e.name}: ${e.message}`:String(e)}function wt(e,t,r,n,o){let s=[],a;for(let i of Array.from(r.children)){let m=i.tagName.toLowerCase();m==="variables"?a=i:(m==="block"||m==="shadow")&&s.push(i)}if(!s.length&&t.getTopBlocks(!1).length)return"incoming XML has no blocks";if(a)try{e.Xml.domToVariables(a,t)}catch{}let l=new Map;for(let i of t.getTopBlocks(!1))l.set(i.id,i);let p=[],k=[];for(let i of s){let m=i.getAttribute("id"),b=m?l.get(m):void 0;if(!b){k.push(i);continue}l.delete(b.id),E(e.Xml.blockToDom(b))!==E(i)&&(b.dispose(!1),p.push(i))}let f=new Map;for(let i of l.values()){let m=E(e.Xml.blockToDom(i),!0),b=f.get(m);b?b.push(i):f.set(m,[i])}for(let i of k){let b=f.get(E(i,!0))?.shift();b?l.delete(b.id):p.push(i)}for(let i of l.values())n&&!Et(n,e,i)||i.dispose(!1);jt(e,t);for(let i of p){let m=e.Xml.domToBlock(i,t);o&&m?.id&&o.push(m.id)}}function Pe(e){let t;try{if(t=new DOMParser().parseFromString(e,"text/xml"),t.getElementsByTagName("parsererror").length)return}catch{return}let r=new Set,n=new Set;for(let o of Array.from(t.documentElement?.children??[])){let s=o.tagName.toLowerCase();if(s!=="block"&&s!=="shadow")continue;let a=o.getAttribute("id");a&&r.add(a),n.add(E(o,!0))}return{ids:r,contents:n}}function Et(e,t,r){try{return e.ids.has(r.id)?!0:e.contents.has(E(t.Xml.blockToDom(r),!0))}catch{return!0}}function jt(e,t){let r=new Set;for(let n of t.getTopBlocks(!1)){let o;try{o=E(e.Xml.blockToDom(n),!0)}catch{continue}r.has(o)?n.dispose(!1):r.add(o)}}function E(e,t=!1){let r=Array.from(e.attributes).filter(o=>!(t&&o.name==="id")).map(o=>{let s=o.name==="x"||o.name==="y"?String(Math.round(Number(o.value)||0)):o.value;return`${o.name}=${s}`}).sort().join(" "),n=Array.from(e.childNodes).map(o=>{if(o.nodeType===1)return E(o,t);if(o.nodeType===3){let s=(o.textContent??"").trim();return s?`#${s}`:""}return""}).filter(Boolean).join("");return`<${e.tagName.toLowerCase()} ${r}>${n}`}function C(e,t){let r=Re(t,e);if(!r)return;let n=t.pxt?.blocks;for(let s of[n?.saveWorkspaceXml,n?.saveBlocksXml])if(typeof s=="function")try{let a=s.call(n,r);if(typeof a=="string"&&a)return a}catch(a){console.warn(`[blocks] pxt saveWorkspaceXml failed: ${A(a)}`)}let o=K(t,r);if(o?.Xml)try{return o.Xml.domToText(o.Xml.workspaceToDom(r))}catch(s){console.warn(`[blocks] Blockly workspace serialize failed: ${A(s)}`);return}}var De=1600;function We(e,t,r){if(!(!r.length||!e.workspace)){try{St(t)}catch{return}for(let n of r)try{let o=e.workspace.getBlockById?.(n)?.getSvgRoot?.();if(!o)continue;o.classList.remove(O),o.getBoundingClientRect(),o.classList.add(O),t.setTimeout(()=>o.classList.remove(O),De)}catch{}}}var O="arcade-remote-change";function St(e){let t=e.document;if(t.getElementById("arcade-remote-change-style"))return;let r=t.createElement("style");r.id="arcade-remote-change-style",r.textContent=`
+    @keyframes ${O} {
+      from { stroke: #ffc400; stroke-width: 5px; stroke-opacity: 1; }
+      to { stroke: #ffc400; stroke-width: 5px; stroke-opacity: 0; }
+    }
+    .${O} > .blocklyPath {
+      animation: ${O} ${De}ms ease-out forwards;
+    }
+  `,t.head.appendChild(r)}var T='<xml xmlns="https://developers.google.com/blockly/xml"><block type="pxt-on-start" x="0" y="0"></block></xml>',c={levels:{level1:T},shared:{},current:"level1",levelsEnabled:!1};function x(){return Object.keys(c.levels).sort((e,t)=>e.localeCompare(t,void 0,{numeric:!0,sensitivity:"base"}))}function _(){return xe(Se(c.current,c.levels[c.current]??T),c.shared)}var Tt="arcade-collab",N="state",Ve="project";function qe(){return new Promise((e,t)=>{let r=indexedDB.open(Tt,1);r.onupgradeneeded=()=>r.result.createObjectStore(N),r.onsuccess=()=>e(r.result),r.onerror=()=>t(r.error)})}async function Mt(){try{let e=await qe();return await new Promise((t,r)=>{let n=e.transaction(N).objectStore(N).get(Ve);n.onsuccess=()=>t(n.result),n.onerror=()=>r(n.error)})}catch{return}}async function Ye(){let e=await qe();await new Promise((t,r)=>{let n=e.transaction(N,"readwrite");n.objectStore(N).put(c,Ve),n.oncomplete=()=>t(),n.onerror=()=>r(n.error)})}var me;function y(){clearTimeout(me),me=setTimeout(()=>{Ye().then(()=>g("Saved"),e=>g(`Could not save: ${ae(e)}`))},400)}var w=Math.random().toString(36).slice(2),h;function Lt(e){let t=new BroadcastChannel(`arcade-collab:${e}`);return t.onmessage=r=>Je(r.data),{label:`tabs in this browser (room "${e}")`,send:r=>t.postMessage(r),close:()=>t.close()}}function Bt(e,t){let r=new URL(e);r.searchParams.set("room",t);let n=new WebSocket(r.toString()),o=[];return n.onopen=()=>{g(`Connected to ${r.host}`);for(let s of o.splice(0))n.send(s);n.send(JSON.stringify({type:"hello",from:w}))},n.onmessage=s=>{try{Je(JSON.parse(String(s.data)))}catch{}},n.onclose=()=>g(`Disconnected from ${r.host}`),n.onerror=()=>g(`Could not reach ${r.host}`),{label:r.host,send:s=>{let a=JSON.stringify(s);n.readyState===WebSocket.OPEN?n.send(a):o.push(a)},close:()=>n.close()}}function $t(e,t){h?.close();try{h=e?Bt(e,t):Lt(t)}catch(r){g(`Could not connect: ${ae(r)}`),h=void 0;return}e||(g(`Syncing with ${h.label}`),h.send({type:"hello",from:w}))}var F=!1,Ne=!1;function Je(e){if(!(!e||e.from===w))switch(e.type){case"hello":h?.send({type:"state",from:w,levels:c.levels,shared:c.shared,current:c.current,levelsEnabled:c.levelsEnabled});return;case"state":if(!e.force&&(F||Ne))return;Ne=!0,c={levels:{...e.levels},shared:{...e.shared},current:e.current,levelsEnabled:e.levelsEnabled??Object.keys(e.levels).length>1},c.current in c.levels||(c.current=x()[0]),y(),U(),re(),L(c.current,{broadcast:!1});return;case"blocks":e.level===c.current?(ce.onRemoteChange(e.xml,Date.now()),D()):(c.levels[e.level]=e.xml,y(),re());return;case"files":{let t={};for(let[r,n]of Object.entries(e.files))$(r)&&(t[r]=n);c.shared={...c.shared,...t},y(),ne();return}case"settings":c.levelsEnabled=e.levelsEnabled,y(),U();return;case"level":e.level!==c.current&&L(e.level,{broadcast:!1});return}}var se=document.getElementById("editor"),M=_(),u,He,I,H="",ee=!1,te=0,Ot=2500,Ge=120,ce=new R(J),he;function v(){return se.contentWindow}var X=!1;async function It(){X=!0,ge("Loading the MakeCode Arcade editor\u2026"),setTimeout(ke,2e4);try{se.src=await Oe(!1)}catch(e){ge(`Could not load MakeCode Arcade: ${ae(e)}`)}}window.addEventListener("message",e=>{if(e.source!==se.contentWindow)return;if(e.data?.type==="blocksEditorSave"){clearTimeout(me),Ye().then(()=>g("Saved"));return}let r=we(e.data,M);switch(r.kind){case"reply":v()?.postMessage(r.message,"*");return;case"projectChanged":{let n=ve(c.shared,be(r.project.text));if(Object.keys(n).length&&(c.shared={...c.shared,...n},y(),(ee||!u?.workspace&&Date.now()>=te)&&(F=!0,h?.send({type:"files",from:w,files:n}))),!u?.workspace&&Date.now()>=te){let o=Te(r.project);le(o)&&!le(c.levels[c.current]??"")||ze(o)}return}case"status":Ke(),u?.workspace||_t();return;case"ignore":return}});function Ke(){u?.workspace||(u=_e(se),u.sameOrigin&&Pt(),u.sameOrigin&&u.workspace&&Rt())}function _t(){let e=0,t=setInterval(()=>{e++,Ke(),(u?.workspace||e>40||!u?.sameOrigin)&&clearInterval(t)},500)}function Rt(){He===void 0&&(He=setInterval(()=>{if(!u||Date.now()<te||pe(u))return;let e=C(u,v());if(e){if(!ee){de(e)>=de(c.levels[c.current]??"")&&(ee=!0,H=e,I=e,ke());return}e!==I&&(I=e,ze(e))}},Ge))}function ze(e){c.levels[c.current]=e,F=!0,y(),ce.onLocalChange(e,Date.now()),D()}function D(){clearTimeout(he);let e=ce.next(Date.now());if(e)switch(e.kind){case"broadcast":h?.send({type:"blocks",from:w,level:c.current,xml:e.blocks}),H=u?.workspace&&C(u,v())||e.blocks,D();return;case"apply":Qe(e.blocks),D();return;case"wait":he=setTimeout(D,Math.max(50,e.untilMs-Date.now()));return}}var z;function Qe(e){if(u&&pe(u)){let o=z===void 0;z=e,o&&setTimeout(()=>{let s=z;z=void 0,s!==void 0&&Qe(s)},Ge);return}if(c.levels[c.current]=e,y(),!u?.workspace){ne();return}let t=C(u,v());if(t&&Le(e,t)){I=t;return}let r=Ce(u,v(),e,Pe(H));if(r.mode==="import"){ne();return}let n=C(u,v())??e;I=n,H=n,At(),We(u,v(),r.touched)}var Ue;function At(){clearTimeout(Ue),Ue=setTimeout(()=>v()?.postMessage(je("restartsimulator"),"*"),700)}function L(e,t={}){e in c.levels||(c.levels[e]=T),c.current=e,y(),re(),t.broadcast!==!1&&h?.send({type:"level",from:w,level:e}),ge(`Loading ${e}\u2026`),ne()}function ne(){ce=new R(J),clearTimeout(he),I=void 0,H="",ee=!1,M=_(),te=Date.now()+Ot,v()?.postMessage(Ee(M),"*"),setTimeout(ke,15e3)}function Ct(){let e=x();return e[e.indexOf(c.current)+1]}var Fe=!1,Xe=0;function Pt(){let e=v();Fe||!e||(Fe=!0,e.addEventListener("message",t=>{let r=Dt(t.data);if(r&&c.levelsEnabled)for(let n of r.split(/\r?\n/)){let o=/^\s*@level\s+(\S+)/i.exec(n),s=/^\s*@next\b/i.test(n);if(!o&&!s)continue;if(Date.now()-Xe<3e3)return;Xe=Date.now();let a=o?o[1]:Ct();if(!a){g("That was the last level");return}L(a);return}}))}function Dt(e){if(e?.type==="bulkserial"&&Array.isArray(e.data))return e.data.map(t=>typeof t?.data=="string"?t.data:"").join("");if(e?.type==="serial"&&typeof e.data=="string")return e.data;if(e?.type==="messagepacket"&&e.data instanceof Uint8Array)return new TextDecoder().decode(e.data)}var Wt=/\.(png|jpe?g|gif|bmp|ico|uf2|hex|zip|mkcd|wav|mp3|ogg)$/i;async function Nt(e){let t={},r={};for(let n of Array.from(e)){if((n.webkitRelativePath||n.name).split("/").length>2||Wt.test(n.name))continue;let s=await n.text();n.name.endsWith(".blocks")?t[n.name.replace(/\.blocks$/,"")]=s:$(n.name)&&(r[n.name]=s)}if(!Object.keys(t).length){g("No .blocks files in that folder");return}Ze(t,r)}async function Ht(e){try{let t=JSON.parse(await e.text());if(!t.levels||typeof t.levels!="object")throw new Error("not an Arcade Collab backup");Ze(t.levels,t.shared??{})}catch(t){g(`Could not open backup: ${ae(t)}`)}}function Ze(e,t){if(!window.confirm("Replace the current project with this one, for everyone connected?"))return;let r=Object.keys(e).sort((n,o)=>n.localeCompare(o,void 0,{numeric:!0,sensitivity:"base"}));c={levels:e,shared:t,current:"level1"in e?"level1":r[0],levelsEnabled:r.length>1},F=!0,y(),et(),U(),X?L(c.current,{broadcast:!1}):M=_(),B()}function et(){h?.send({type:"state",from:w,levels:c.levels,shared:c.shared,current:c.current,levelsEnabled:c.levelsEnabled,force:!0})}function Ut(){let e=new Blob([JSON.stringify(c)],{type:"application/json"}),t=document.createElement("a");t.href=URL.createObjectURL(e),t.download="arcade-collab-backup.json",document.body.appendChild(t),t.click(),t.remove(),setTimeout(()=>URL.revokeObjectURL(t.href),1e4)}var d=e=>document.getElementById(e),ye=d("level"),Ft=d("level-controls"),Xt=d("status"),tt=d("loading"),Vt=d("loading-text"),P=d("folder-input"),Z=d("backup-input");function re(){ye.replaceChildren(...x().map(e=>{let t=document.createElement("option");return t.value=e,t.textContent=e,t.selected=e===c.current,t}))}function U(){Ft.hidden=!c.levelsEnabled,re()}function g(e){Xt.textContent=e}function ge(e){Vt.textContent=e,tt.hidden=!1}function ke(){tt.hidden=!0}function ae(e){return e instanceof Error?e.message:String(e)}ye.addEventListener("change",()=>L(ye.value));d("add-level").addEventListener("click",()=>{let e=x().length+1;for(;`level${e}`in c.levels;)e++;L(`level${e}`)});d("export").addEventListener("click",Ut);P.addEventListener("change",()=>{P.files?.length&&Nt(P.files),P.value=""});Z.addEventListener("change",()=>{let e=Z.files?.[0];e&&Ht(e),Z.value=""});var nt=d("setup"),qt=d("project-summary"),V=d("levels-on"),Yt=d("levels-detail"),Jt=d("lv-count"),Gt=d("lv-chips"),oe=d("relay-url"),rt=d("setup-room"),ot=d("setup-start"),st=2,ct=50,j={levelCount:10};function W(e,t){try{return localStorage.getItem(`arcade-collab:${e}`)??t}catch{return t}}function Q(e,t){try{localStorage.setItem(`arcade-collab:${e}`,t)}catch{}}function at(){return document.querySelector('input[name="mode"]:checked')?.value==="relay"?"relay":"tabs"}function it(){V.checked=c.levelsEnabled,j.levelCount=Math.max(st,Math.min(ct,x().length>1?x().length:10)),oe.value=W("relay",""),rt.value=W("room","arcade");let e=W("mode","tabs");for(let t of document.querySelectorAll('input[name="mode"]'))t.checked=t.value===e;ot.textContent=X?"Apply":"Start editing \u2192",B(),nt.hidden=!1}function B(){let e=x(),t=e.some(r=>c.levels[r]!==T);qt.textContent=t?`Your saved project has ${e.length} level${e.length===1?"":"s"}: ${e.join(", ")}.`:"A new, empty project.",Yt.hidden=!V.checked,Jt.textContent=String(j.levelCount),Gt.replaceChildren(...Array.from({length:j.levelCount},(r,n)=>{let o=document.createElement("span");return o.className="chip",o.textContent=`L${n+1}`,n===0&&(o.classList.add("first"),o.title="Loaded first"),o})),oe.hidden=at()!=="relay"}V.addEventListener("change",B);for(let e of document.querySelectorAll('input[name="mode"]'))e.addEventListener("change",B);d("lv-minus").addEventListener("click",()=>{j.levelCount=Math.max(st,j.levelCount-1),B()});d("lv-plus").addEventListener("click",()=>{j.levelCount=Math.min(ct,j.levelCount+1),B()});d("setup-new").addEventListener("click",()=>{x().some(t=>c.levels[t]!==T)&&!window.confirm("Start a new, empty project? The saved one is replaced, for everyone connected \u2014 Export it first to keep a copy.")||(c={levels:{level1:T},shared:{},current:"level1",levelsEnabled:V.checked},F=!0,y(),et(),X?L("level1",{broadcast:!1}):M=_(),B())});d("setup-import").addEventListener("click",()=>P.click());d("setup-backup").addEventListener("click",()=>Z.click());d("open-setup").addEventListener("click",it);ot.addEventListener("click",()=>{var s,a;let e=c.levelsEnabled;if(c.levelsEnabled=V.checked,c.levelsEnabled)for(let l=1;l<=j.levelCount;l++)(s=c.levels)[a=`level${l}`]??(s[a]=T);c.current in c.levels||(c.current=x()[0]),y(),U(),e!==c.levelsEnabled&&h?.send({type:"settings",from:w,levelsEnabled:c.levelsEnabled});let t=at(),r=oe.value.trim(),n=rt.value.trim()||"arcade";if(t==="relay"&&!r){oe.focus();return}let o=t==="relay"?r:"";(!h||o!==W("relay-active","-")||n!==W("room",""))&&($t(o,n),Q("relay-active",o)),Q("mode",t),Q("relay",r),Q("room",n),nt.hidden=!0,X||(M=_(),It())});(async()=>{let e=await Mt();e?.levels&&Object.keys(e.levels).length&&(c={...e,levelsEnabled:e.levelsEnabled??Object.keys(e.levels).length>1},c.current in c.levels||(c.current=x()[0])),M=_(),U(),it()})();})();
+
+</script>
