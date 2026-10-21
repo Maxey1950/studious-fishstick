@@ -1540,3 +1540,159 @@ function installHighlightStyle(view: any): void {
   `;
   doc.head.appendChild(style);
 }
+
+/**
+ * Puts project files — images, tilemaps, their generated code — into the
+ * running editor, without loading the project again.
+ *
+ * The editor reads images only when it loads a project, so a sprite drawn on
+ * someone else's computer used to mean reloading everyone's editor, game and
+ * all. Instead the files are written the way its own image editor writes them,
+ * and the images in them are added to the image store the open blocks are
+ * drawing from.
+ *
+ * "reload" when that cannot be done: an extension added or removed, which the
+ * editor has to fetch and compile in. "busy" when it could not be done just
+ * now — the editor midway through loading something, or not looking the way
+ * this expects — and is worth trying again in a moment.
+ */
+export async function applyFilesLive(
+  view: any,
+  files: Record<string, string>
+): Promise<'applied' | 'reload' | 'busy'> {
+  const editorPkg = view?.__arcadeOpts?.projectView?.editorFile?.epkg;
+  const top = editorPkg?.topPkg ?? editorPkg;
+  const pxt = view?.pxt;
+  if (
+    !top?.ksPkg?.config ||
+    typeof top.setContentAsync !== 'function' ||
+    typeof top.updateConfigAsync !== 'function' ||
+    typeof pxt?.TilemapProject !== 'function' ||
+    typeof pxt?.react?.getTilemapProject !== 'function'
+  ) {
+    return 'busy';
+  }
+  try {
+    let declared: string[] | undefined;
+    if ('pxt.json' in files) {
+      const next = JSON.parse(files['pxt.json']);
+      const current = top.ksPkg.config;
+      if (JSON.stringify(next.dependencies ?? {}) !== JSON.stringify(current.dependencies ?? {})) {
+        return 'reload';
+      }
+      if (JSON.stringify(next.files ?? []) !== JSON.stringify(current.files ?? [])) {
+        declared = next.files;
+      }
+    }
+    for (const [name, content] of Object.entries(files)) {
+      if (name !== 'pxt.json' && top.files?.[name]?.content !== content) {
+        await top.setContentAsync(name, content);
+      }
+    }
+    // After the files it lists are there: the compiler reads what it declares.
+    if (declared) {
+      await top.updateConfigAsync((config: any) => {
+        config.files = declared;
+      });
+    }
+    // The parsed images are cached on the package; read them again.
+    top.ksPkg._jres = undefined;
+    mergeAssets(pxt, pxt.react.getTilemapProject(), top.ksPkg);
+    return 'applied';
+  } catch {
+    return 'busy';
+  }
+}
+
+/**
+ * Brings the editor's image store up to date with its package's files.
+ *
+ * The store is not replaced: blocks showing an image are listening to the
+ * asset in it, so an image that changed is updated in place and they redraw,
+ * and a new one is added beside the rest. One that has gone from the files is
+ * left alone — it may be one drawn here a moment ago and not yet sent.
+ */
+function mergeAssets(pxt: any, live: any, pkg: any): void {
+  const fresh = new pxt.TilemapProject();
+  fresh.loadPackage(pkg);
+  // Tiles before the tilemaps that are made of them.
+  for (const type of ['tile', 'image', 'animation', 'song', 'json', 'tilemap']) {
+    let assets: any[];
+    try {
+      assets = fresh.getAssets(type);
+    } catch {
+      continue;
+    }
+    for (const asset of assets) {
+      if (type === 'tilemap' && Array.isArray(asset.data?.tileset?.tiles)) {
+        // Made of the fresh store's tiles; they must be the live store's.
+        asset.data.tileset.tiles = asset.data.tileset.tiles.map(
+          (tile: any) => live.lookupAsset('tile', tile.id) ?? tile
+        );
+      }
+      const mine = live.lookupAsset(type, asset.id);
+      if (!mine) {
+        asset.internalID = live.getNewInternalId();
+        live.getAssetCollection(type).add(asset);
+      } else if (!pxt.assetEquals(mine, asset)) {
+        asset.internalID = mine.internalID;
+        live.updateAsset(asset);
+      }
+    }
+  }
+}
+
+/**
+ * Replaces everything on the canvas with other blocks — another level — in the
+ * running editor, without loading a project.
+ *
+ * Undo history goes with the old blocks: undoing into a level that is no
+ * longer on screen would bring it back over this one. False if the editor
+ * could not be reached or the blocks could not be read; then load the project.
+ */
+export function replaceBlocks(reach: EditorReach, view: any, xml: string): boolean {
+  const workspace = refreshWorkspace(view, reach);
+  const Blockly = blocklyOf(view, workspace);
+  if (!workspace || !Blockly?.Xml?.clearWorkspaceAndLoadFromXml) {
+    return false;
+  }
+  let dom: Element;
+  try {
+    dom = Blockly.utils.xml.textToDom(xml);
+  } catch {
+    return false;
+  }
+  Blockly.Events.disable();
+  try {
+    Blockly.Xml.clearWorkspaceAndLoadFromXml(dom, workspace);
+  } catch {
+    return false;
+  } finally {
+    Blockly.Events.enable();
+  }
+  try {
+    workspace.clearUndo?.();
+  } catch {
+    // Undo reaching back is a nuisance, not a reason to fail the switch.
+  }
+  return true;
+}
+
+/**
+ * Runs the game from the blocks on the canvas now.
+ *
+ * Blocks put in from outside — someone else's change, another level — go in
+ * with the editor's events off, so it has not turned them into code yet, and
+ * its own restart only runs again what it last compiled: the game went on
+ * playing the old level. Saving first writes the code out; running compiles it.
+ * False if the editor could not be asked; then a plain restart is all there is.
+ */
+export async function runLatestGame(view: any): Promise<boolean> {
+  const projectView = view?.__arcadeOpts?.projectView;
+  if (typeof projectView?.saveFileAsync !== 'function' || typeof projectView?.runSimulator !== 'function') {
+    return false;
+  }
+  await projectView.saveFileAsync();
+  await projectView.runSimulator({});
+  return true;
+}

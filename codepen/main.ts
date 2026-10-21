@@ -33,12 +33,15 @@ import { DEFAULT_SYNC_OPTIONS, SyncState } from '../src/shared/syncState';
 import { Peer, type DataConnection } from 'peerjs';
 import {
   applyBlocksDirectly,
+  applyFilesLive,
   baseIndexOf,
   createBlobEditorUrl,
   highlightBlocks,
   isWorkspaceBusy,
   probeEditor,
   readBlocksDirectly,
+  replaceBlocks,
+  runLatestGame,
   type EditorReach,
 } from '../src/webview/makecode/sameOrigin';
 
@@ -92,8 +95,20 @@ function levelNames(): string[] {
  */
 let loadToken = 0;
 
+// How many times the editor has been handed a whole project since it started:
+// type arcadeCollabLoads in the console to see that editing, levels, sprites
+// and joining are not reloading it.
+Object.defineProperty(window, 'arcadeCollabLoads', { get: () => loadToken });
+
+/**
+ * The blocks in the project last handed to the editor. A change that arrives
+ * while it is loading is not in them, and goes in once it has loaded.
+ */
+let givenBlocks = EMPTY_LEVEL;
+
 function buildProject(): ArcadeProject {
-  const level = createProject(store.current, store.levels[store.current] ?? EMPTY_LEVEL);
+  givenBlocks = store.levels[store.current] ?? EMPTY_LEVEL;
+  const level = createProject(store.current, givenBlocks);
   level.header.collabLoad = loadToken;
   return withFiles(level, store.shared);
 }
@@ -285,9 +300,15 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
   // time, and without the host noticing it is gone nobody takes over. So every
   // link carries a small "still here" every couple of seconds, and a link that
   // has been silent too long is treated as gone.
+  //
+  // The limit is generous. Chrome slows the timers of a tab in the background
+  // — to once a minute after a few minutes — and a busy game can hold up a
+  // page for seconds; with a short limit, both looked like leaving, and people
+  // were kicked out at random. Someone who really leaves closes their links as
+  // the page goes (below), which is noticed at once.
   const PING = { type: '__ping' } as const;
   const PING_MS = 2000;
-  const SILENT_MS = 7000;
+  const SILENT_MS = 75000;
   const lastHeard = new Map<DataConnection, number>();
   const heartbeat = setInterval(() => {
     const now = Date.now();
@@ -489,6 +510,9 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
   } else {
     join();
   }
+  // Leaving closes the links, so the others know straight away.
+  const leave = (): void => reset();
+  window.addEventListener('pagehide', leave);
   return {
     label: `room ${room}`,
     send: (message) => {
@@ -502,6 +526,7 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
       closed = true;
       clearTimeout(retryTimer);
       clearInterval(heartbeat);
+      window.removeEventListener('pagehide', leave);
       reset();
     },
   };
@@ -573,22 +598,23 @@ function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): v
       } else if (role === 'host' ? !message.force : !message.force && (editedHere || adoptedState)) {
         return;
       }
+      // Joining for the first time lands on the host's level; after that,
+      // everyone is on a level of their own and rejoining moves nobody.
+      const firstJoin = role === 'join' && !editorStarted;
       adoptedState = true;
       store = {
         levels: { ...message.levels },
         shared: withOwnEditor(message.shared, store.shared),
-        // Everyone is on a level of their own; joining does not move anyone.
-        current: store.current in message.levels ? store.current : message.current,
+        current: !firstJoin && store.current in message.levels ? store.current : message.current,
         levelsEnabled: message.levelsEnabled ?? Object.keys(message.levels).length > 1,
       };
-      incoming = { ...store.shared };
       if (!(store.current in store.levels)) {
         store.current = levelNames()[0];
       }
       persist();
       applyLevelMode();
       renderLevels();
-      loadLevel(store.current, { broadcast: false });
+      void showProject();
       return;
 
     case 'blocks':
@@ -624,12 +650,10 @@ function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): v
       store.shared = { ...store.shared, ...theirs };
       incoming = { ...incoming, ...theirs };
       persist();
-      // The editor reads images and extensions only when it loads a project,
-      // so a new sprite from someone else needs the level reloaded to appear.
       // One sprite arrives as several messages — its images, then the code
-      // made from them — so wait for the rest before reloading once.
+      // made from them — so wait for the rest and put them in together.
       clearTimeout(idleReloadTimer);
-      idleReloadTimer = setTimeout(reloadWhenIdle, GATHER_MS) as unknown as number;
+      idleReloadTimer = setTimeout(addIncomingFiles, GATHER_MS) as unknown as number;
       return;
     }
 
@@ -698,7 +722,9 @@ let idleReloadTimer: number | undefined;
 const IDLE_MS = 1500;
 const GATHER_MS = 600;
 const MAX_WAIT_MS = 20000;
-const POLL_MS = 120;
+const POLL_MS = 1500;
+/** How often a pending drop or retry is looked at again. */
+const RETRY_MS = 120;
 
 let sync = new SyncState(DEFAULT_SYNC_OPTIONS);
 let syncTimer: number | undefined;
@@ -849,40 +875,81 @@ function watchForWorkspace(): void {
 }
 
 /**
- * Reads the workspace on a timer, rather than waiting for the editor to save.
+ * Reads the workspace when it changes, rather than waiting for the editor to
+ * save.
+ *
+ * Reading it means writing the whole of it out as text, and a big game is a
+ * lot of text: doing that eight times a second, whether anything had changed
+ * or not, was steady work for a computer already running the game. Blockly
+ * says when a block changes, and a read follows that; the timer stays only as
+ * a slow backstop for anything that changes without saying so.
  */
 function startPolling(): void {
   if (pollTimer !== undefined) {
     return;
   }
-  pollTimer = setInterval(() => {
-    // Nor while a load waits for the editor to start, or someone who joined
-    // waits for the host's project: what is on screen is the project being
-    // replaced, and sending it would undo the one that counts.
-    if (!reach || Date.now() < settlingUntil || importWhenReady || waitingForHost || isWorkspaceBusy(reach)) {
+  pollTimer = setInterval(readWorkspace, POLL_MS) as unknown as number;
+}
+
+/** Workspaces already being listened to; the editor makes a new one on a load. */
+const listening = new WeakSet<object>();
+let readTimer: number | undefined;
+const READ_AFTER_MS = 60;
+
+function listenToWorkspace(): void {
+  const workspace = reach?.workspace;
+  if (!workspace || listening.has(workspace) || typeof workspace.addChangeListener !== 'function') {
+    return;
+  }
+  listening.add(workspace);
+  workspace.addChangeListener((event: { isUiEvent?: boolean }) => {
+    // Selecting, scrolling and opening the toolbox change nothing.
+    if (event?.isUiEvent) {
       return;
     }
-    const blocks = readBlocksDirectly(reach, view());
-    if (!blocks) {
-      return;
-    }
-    if (!workspaceLoaded) {
-      if (countBlocks(blocks) >= countBlocks(store.levels[store.current] ?? '')) {
-        workspaceLoaded = true;
-        agreed = blocks;
-        lastPolled = blocks;
-        hideLoading();
-      }
-      return;
-    }
-    if (blocks !== lastPolled) {
+    clearTimeout(readTimer);
+    readTimer = setTimeout(readWorkspace, READ_AFTER_MS) as unknown as number;
+  });
+}
+
+function readWorkspace(): void {
+  // Not while a load is under way or waits for the editor to start, or while
+  // someone who joined waits for the host's project: what is on screen is
+  // the project being replaced, and sending it would undo the one that
+  // counts. Nor with a block in hand: it is read when it is put down.
+  if (!reach || Date.now() < settlingUntil || importWhenReady || waitingForHost || isWorkspaceBusy(reach)) {
+    return;
+  }
+  const blocks = readBlocksDirectly(reach, view());
+  // Reading finds the live workspace, which a load replaces.
+  listenToWorkspace();
+  if (!blocks) {
+    return;
+  }
+  if (!workspaceLoaded) {
+    if (countBlocks(blocks) >= countBlocks(givenBlocks)) {
+      workspaceLoaded = true;
+      agreed = blocks;
       lastPolled = blocks;
-      localChange(blocks);
+      hideLoading();
+      // Changes that came in while it loaded.
+      const latest = store.levels[store.current];
+      if (latest && !sameBlocks(latest, givenBlocks)) {
+        applyRemote(latest);
+      }
     }
-  }, POLL_MS) as unknown as number;
+    return;
+  }
+  if (blocks !== lastPolled) {
+    lastPolled = blocks;
+    localChange(blocks);
+  }
 }
 
 function localChange(blocks: string): void {
+  // MakeCode restarts the game itself after a change made here, and that run
+  // has everyone's changes in it.
+  updateGameButton.hidden = true;
   lastLocalEdit = Date.now();
   editedSinceSent = true;
   store.levels[store.current] = blocks;
@@ -931,7 +998,7 @@ function applyRemote(blocks: string): void {
         if (pending !== undefined) {
           applyRemote(pending);
         }
-      }, POLL_MS);
+      }, RETRY_MS);
     }
     return;
   }
@@ -939,18 +1006,9 @@ function applyRemote(blocks: string): void {
   store.levels[store.current] = blocks;
   persist();
 
-  if (!reach?.workspace) {
-    reloadLevel();
-    return;
-  }
-
-  // A load is under way, of the level as it was before this arrived. One not
-  // yet sent will be built from the store, which has it now; one already sent
-  // is followed by another.
-  if (!workspaceLoaded) {
-    if (!importWhenReady) {
-      reloadLevel();
-    }
+  // The editor is still starting or loading. It is kept in the store, and
+  // goes in when the load is done — no second load for it.
+  if (!reach?.workspace || !workspaceLoaded) {
     return;
   }
 
@@ -972,7 +1030,7 @@ function applyRemote(blocks: string): void {
   const readback = readBlocksDirectly(reach, view()) ?? blocks;
   lastPolled = readback;
   agreed = readback;
-  restartSimulatorSoon();
+  gameOutOfDate();
   highlightBlocks(reach, view(), applied.touched);
   // The merge kept that change, and reading back already includes it, so the
   // poll would never see it as new: send it now.
@@ -983,13 +1041,35 @@ function applyRemote(blocks: string): void {
 
 let simTimer: number | undefined;
 
+/**
+ * Someone else changed the code the game is running.
+ *
+ * Their changes go into the blocks with the editor's events switched off, so
+ * MakeCode does not restart the game for them — and restarting it here for
+ * every change anyone made restarted everyone's game, over and over, which is
+ * the lag you feel while playing. The game keeps running; a button offers the
+ * new version when you want it.
+ */
+function gameOutOfDate(): void {
+  updateGameButton.hidden = false;
+}
+
 /** The game picks up the new blocks once changes stop arriving. */
 function restartSimulatorSoon(): void {
   clearTimeout(simTimer);
-  simTimer = setTimeout(
-    () => view()?.postMessage(editorCommand('restartsimulator'), '*'),
-    700
-  ) as unknown as number;
+  simTimer = setTimeout(restartGame, 700) as unknown as number;
+}
+
+/** Runs the game again, from the blocks on the canvas now. */
+function restartGame(): void {
+  runLatestGame(view()).then(
+    (ran) => {
+      if (!ran) {
+        view()?.postMessage(editorCommand('restartsimulator'), '*');
+      }
+    },
+    () => view()?.postMessage(editorCommand('restartsimulator'), '*')
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,6 +1082,8 @@ function restartSimulatorSoon(): void {
  * once the next has replaced it.
  */
 function loadLevel(name: string, options: { broadcast?: boolean } = {}): void {
+  // The level being left keeps its last change, and everyone has it.
+  sendUnsentChange();
   if (!(name in store.levels)) {
     store.levels[name] = EMPTY_LEVEL;
   }
@@ -1011,7 +1093,79 @@ function loadLevel(name: string, options: { broadcast?: boolean } = {}): void {
   if (options.broadcast !== false) {
     channel?.send({ type: 'level', from: ME, level: name });
   }
+  if (showLevelLive()) {
+    return;
+  }
   showLoading(`Loading ${name}…`);
+  reloadLevel();
+}
+
+/**
+ * Sends this level's blocks now if a change to them has not gone out yet:
+ * one the poll has not read, or one the sync rules were holding back. Moving
+ * to another level starts the sync over, and it would be lost.
+ */
+function sendUnsentChange(): void {
+  flushLocalChange();
+  if (editedSinceSent && workspaceLoaded) {
+    channel?.send({ type: 'blocks', from: ME, level: store.current, xml: store.levels[store.current] });
+    editedSinceSent = false;
+  }
+}
+
+/**
+ * Shows the current level by swapping the blocks on the canvas, with no
+ * reload: the editor, its toolbox and the person's place in it stay put, and
+ * the game restarts on the new level. All levels share their images, so the
+ * blocks are all that changes. False if it cannot be done; then load it.
+ */
+function showLevelLive(): boolean {
+  if (!reach?.workspace || !workspaceLoaded || importWhenReady || Date.now() < settlingUntil) {
+    return false;
+  }
+  const blocks = store.levels[store.current] ?? EMPTY_LEVEL;
+  if (!replaceBlocks(reach, view(), blocks)) {
+    return false;
+  }
+  clearTimeout(syncTimer);
+  sync = new SyncState(DEFAULT_SYNC_OPTIONS);
+  editedSinceSent = false;
+  const readback = readBlocksDirectly(reach, view()) ?? blocks;
+  lastPolled = readback;
+  agreed = readback;
+  // The game still running is the level being left: anything it signals in
+  // the moment before it restarts is not about this one.
+  lastGameSignal = Date.now();
+  updateGameButton.hidden = true;
+  restartSimulatorSoon();
+  return true;
+}
+
+/**
+ * Shows a whole project that arrived from someone else — the host's, on
+ * joining or rejoining, or one opened for everyone — in the running editor.
+ *
+ * Images first, so the blocks that use them have them to draw. Someone who
+ * joined has no editor yet the first time: it starts now, with the host's
+ * project, instead of starting with their own and reloading into the host's.
+ */
+async function showProject(): Promise<void> {
+  if (!editorStarted) {
+    if (role === 'join') {
+      project = buildProject();
+      void startEditor();
+    }
+    return;
+  }
+  incoming = Object.fromEntries(Object.entries(store.shared).filter(([name]) => !FROM_BLOCKS.has(name)));
+  const ready = reach?.workspace && workspaceLoaded && !importWhenReady && Date.now() >= settlingUntil;
+  if (ready && (await applyFilesLive(view(), incoming)) === 'applied') {
+    incoming = {};
+    if (showLevelLive()) {
+      return;
+    }
+  }
+  showLoading(`Loading ${store.current}\u2026`);
   reloadLevel();
 }
 
@@ -1105,12 +1259,54 @@ function withOwnEditor(files: ProjectText, own: ProjectText): ProjectText {
 }
 
 /**
+ * Puts a friend's new images into the running editor, with no reload.
+ *
+ * Waits for any load under way (it may already carry them, and is no place to
+ * be writing files) and for a block in hand to be put down. Only an extension
+ * cannot go in live; that still reloads, once the person pauses.
+ */
+async function addIncomingFiles(tries = 0): Promise<void> {
+  clearTimeout(idleReloadTimer);
+  const busy =
+    !reach?.workspace ||
+    !workspaceLoaded ||
+    importWhenReady ||
+    Date.now() < settlingUntil ||
+    isWorkspaceBusy(reach);
+  if (busy) {
+    idleReloadTimer = setTimeout(() => addIncomingFiles(tries), 300) as unknown as number;
+    return;
+  }
+  const adding = { ...incoming };
+  if (!Object.keys(adding).length) {
+    return;
+  }
+  const outcome = await applyFilesLive(view(), adding);
+  if (outcome === 'applied') {
+    for (const [name, content] of Object.entries(adding)) {
+      if (incoming[name] === content) {
+        delete incoming[name];
+      }
+    }
+    gameOutOfDate();
+    setStatus('Added new images from a friend');
+  } else if (outcome === 'busy' && tries < LIVE_TRIES) {
+    // The editor is in the middle of something — its own Import, say. Being
+    // busy for a moment is no reason to reload it.
+    idleReloadTimer = setTimeout(() => addIncomingFiles(tries + 1), 1000) as unknown as number;
+  } else {
+    reloadWhenIdle();
+  }
+}
+
+const LIVE_TRIES = 8;
+
+/**
  * Reloads the level once this person is not in the middle of something.
  *
- * A new sprite or extension from someone else cannot be added to a running
- * editor, but it can wait: not while a block is in hand, nor while the image
- * editor is open, nor within a moment of the last change made here. Several
- * arriving together become one reload.
+ * An extension from someone else cannot be added to a running editor, but the
+ * reload can wait: not while a block is in hand, nor while the image editor is
+ * open, nor within a moment of the last change made here.
  */
 function reloadWhenIdle(since = Date.now()): void {
   clearTimeout(idleReloadTimer);
@@ -1119,7 +1315,7 @@ function reloadWhenIdle(since = Date.now()): void {
     isFieldEditorOpen() ||
     Date.now() - lastLocalEdit < IDLE_MS;
   if (busy && Date.now() - since < MAX_WAIT_MS) {
-    setStatus('New images from a friend \u2014 adding them when you pause');
+    setStatus('A friend added an extension \u2014 reloading when you pause');
     idleReloadTimer = setTimeout(() => reloadWhenIdle(since), 300) as unknown as number;
     return;
   }
@@ -1134,7 +1330,7 @@ function reloadWhenIdle(since = Date.now()): void {
     idleReloadTimer = setTimeout(() => reloadWhenIdle(since), 300) as unknown as number;
     return;
   }
-  showLoading('Adding new images from a friend\u2026');
+  showLoading('Adding an extension from a friend\u2026');
   reloadLevel();
 }
 
@@ -1362,6 +1558,11 @@ const el = <T extends HTMLElement>(id: string): T => document.getElementById(id)
 
 const levelSelect = el<HTMLSelectElement>('level');
 const levelControls = el<HTMLSpanElement>('level-controls');
+const updateGameButton = el<HTMLButtonElement>('update-game');
+updateGameButton.addEventListener('click', () => {
+  updateGameButton.hidden = true;
+  restartGame();
+});
 const statusEl = el<HTMLSpanElement>('status');
 const loadingEl = el<HTMLDivElement>('loading');
 const loadingText = el<HTMLDivElement>('loading-text');
@@ -1667,7 +1868,8 @@ startButton.addEventListener('click', () => {
   remember('room', room);
 
   setupEl.hidden = true;
-  if (!editorStarted) {
+  // Someone joining starts the editor with the host's project, once it comes.
+  if (!editorStarted && mode !== 'join') {
     project = buildProject();
     void startEditor();
   }

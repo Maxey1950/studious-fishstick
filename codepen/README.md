@@ -32,9 +32,12 @@ with the VS Code extension in `../src`.
   project; nothing saved on their own computers is changed or sent. If the host
   leaves, the others wait for them to come back. "Just this computer" syncs tabs in
   one browser. "Relay server" uses a WebSocket relay; `relay.mjs` is a minimal one.
-- **What syncs live:** blocks, without reloading. A new sprite, tilemap or
-  extension reloads the others' editors once, after they let go of any block
-  they are dragging. Blocks or JavaScript, and which level is open, are each
-  person's own.
+- **What syncs live:** blocks, sprites and tilemaps go into the running editor
+  without reloading it, and so do level changes and joining a room. Only an
+  added extension reloads, once the person pauses. Someone else's change does
+  not restart your game; "Update game" runs the new version when you want it.
+  Blocks or JavaScript, and which level is open, are each person's own. Type
+  `arcadeCollabLoads` in the browser console to see how many times the editor
+  has been reloaded.
 - **Storage:** the browser's IndexedDB. Export / Open backup move a project in and
   out; Import folder takes a folder of `.blocks` files and their assets.
