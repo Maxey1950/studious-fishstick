@@ -31,6 +31,7 @@ import { changedFiles, isShared, sharedFiles, withFiles, type ProjectText } from
 import { sameBlocks } from '../src/shared/sameBlocks';
 import { DEFAULT_SYNC_OPTIONS, SyncState } from '../src/shared/syncState';
 import { Peer, type DataConnection } from 'peerjs';
+import { sha256 } from './sha256';
 import {
   applyBlocksDirectly,
   applyFilesLive,
@@ -283,13 +284,31 @@ function peerRoom(name: string): string {
  * The host passes each message on to everyone else, so four people need only
  * one link each to the host, not one to every other person.
  *
- * If the host leaves, the others' links close and each of them tries for the
- * address again after a random pause: one gets it and hosts, the rest join.
+ * A room can have a password. The address is public — anyone who types the
+ * code reaches the host, or could take the address first and pose as one — so
+ * each new link proves both ways that the other end knows the password before
+ * anything else passes over it, without the password itself ever being sent:
+ *
+ *   joiner → host   a random challenge
+ *   host → joiner   its answer (the challenge hashed with the password), and
+ *                   a challenge of its own
+ *   joiner → host   its answer, once the host's has checked out
+ *
+ * Until then the host sends a link nothing, passes on nothing from it, and
+ * drops it if it takes too long; a joiner believes nothing from a host that
+ * could not answer. Without a password, both sides use an empty one.
  */
-function peerChannel(roomName: string, hosting: boolean): Channel {
+function peerChannel(roomName: string, hosting: boolean, password: string): Channel {
   const room = peerRoom(roomName);
   const hostId = `arcadecollab-${room}`;
   const links = new Set<DataConnection>();
+  /** Links whose other end has proved it knows the password. */
+  const members = new Set<DataConnection>();
+  const answer = (side: 'host' | 'join', challenge: string) =>
+    sha256(`arcade-collab|${side}|${room}|${challenge}|${password}`);
+  const challenge = () =>
+    Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  const AUTH_MS = 15000;
   let peer: Peer | undefined;
   let isHost = false;
   let closed = false;
@@ -325,7 +344,7 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
     if (closed) {
       return;
     }
-    const others = links.size;
+    const others = members.size;
     if (isHost) {
       setConn(
         others
@@ -343,6 +362,7 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
       link.close();
     }
     links.clear();
+    members.clear();
     lastHeard.clear();
     peer?.destroy();
     peer = undefined;
@@ -357,6 +377,7 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
     if (!links.delete(link)) {
       return;
     }
+    const wasMember = members.delete(link);
     lastHeard.delete(link);
     try {
       link.close();
@@ -365,10 +386,12 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
     }
     report();
     if (!isHost && !closed) {
-      // The host left. Only the host has the project, so nobody takes over:
-      // wait for them to come back, and stop editing a copy that would be lost.
-      setConn(`Room ${room}: the host left, waiting for them to come back`, 'off');
-      hostLeft();
+      if (wasMember) {
+        // The host left. Only the host has the project, so nobody takes over:
+        // wait for them to come back, and stop editing a copy that would be lost.
+        setConn(`Room ${room}: the host left, waiting for them to come back`, 'off');
+        hostLeft();
+      }
       reset();
       retry(2000);
     }
@@ -394,19 +417,38 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
       }
     }, 20000);
 
+    /** This end's challenge to the other, once sent. */
+    let mine = '';
+
     link.on('open', () => {
       opened = true;
       clearTimeout(timeout);
       links.add(link);
       lastHeard.set(link, Date.now());
-      report();
-      if (!isHost) {
-        link.send({ type: 'hello', from: ME } satisfies SyncMessage);
+      if (isHost) {
+        // Prove the password in time, or go.
+        setTimeout(() => {
+          if (!members.has(link)) {
+            drop(link);
+          }
+        }, AUTH_MS);
+      } else {
+        mine = challenge();
+        link.send({ type: '__auth', challenge: mine });
       }
     });
     link.on('data', (data) => {
       lastHeard.set(link, Date.now());
-      if ((data as { type?: string })?.type === PING.type) {
+      const raw = data as { type?: string; challenge?: string; answer?: string };
+      if (raw?.type === PING.type) {
+        return;
+      }
+      if (raw?.type === '__auth' || raw?.type === '__denied') {
+        authenticate(link, raw, mine, (value) => (mine = value));
+        return;
+      }
+      // Nothing from anyone who has not proved the password.
+      if (!members.has(link)) {
         return;
       }
       const message = data as SyncMessage;
@@ -417,7 +459,7 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
           onSync(message, (reply) => link.send(reply));
           return;
         }
-        for (const other of links) {
+        for (const other of members) {
           if (other !== link && other.open) {
             other.send(message);
           }
@@ -430,6 +472,59 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
       drop(link);
     });
   };
+
+  /** One step of the password handshake (see above), on either side. */
+  function authenticate(
+    link: DataConnection,
+    message: { type?: string; challenge?: string; answer?: string },
+    mine: string,
+    setMine: (value: string) => void
+  ): void {
+    if (message.type === '__denied') {
+      // Only a host turns people away; from anyone else it means nothing.
+      if (!isHost) {
+        wrongPassword();
+      }
+      return;
+    }
+    if (isHost) {
+      if (message.challenge && !mine) {
+        // Their challenge: answer it, and set ours.
+        const ours = challenge();
+        setMine(ours);
+        link.send({ type: '__auth', answer: answer('host', message.challenge), challenge: ours });
+      } else if (message.answer && mine && !members.has(link)) {
+        if (message.answer === answer('join', mine)) {
+          members.add(link);
+          report();
+        } else {
+          link.send({ type: '__denied' });
+          setTimeout(() => drop(link), 500);
+        }
+      }
+      return;
+    }
+    // Joining: the host must answer our challenge before we answer theirs.
+    if (message.answer && message.challenge && !members.has(link)) {
+      if (message.answer !== answer('host', mine)) {
+        wrongPassword();
+        return;
+      }
+      members.add(link);
+      link.send({ type: '__auth', answer: answer('join', message.challenge) });
+      link.send({ type: 'hello', from: ME } satisfies SyncMessage);
+      report();
+    }
+  }
+
+  /** The two ends have different passwords. Retrying will not change that. */
+  function wrongPassword(): void {
+    closed = true;
+    clearTimeout(retryTimer);
+    reset();
+    setConn(`Room ${room}: wrong password`, 'off');
+    passwordRefused(room);
+  }
 
   /** Tries to become the host; if the room is already hosted, joins it. */
   function claim(): void {
@@ -516,7 +611,7 @@ function peerChannel(roomName: string, hosting: boolean): Channel {
   return {
     label: `room ${room}`,
     send: (message) => {
-      for (const link of links) {
+      for (const link of members) {
         if (link.open) {
           link.send(message);
         }
@@ -540,7 +635,7 @@ type Mode = 'tabs' | 'host' | 'join' | 'relay';
  */
 let role: Mode | undefined;
 
-function connect(mode: Mode, room: string, relay: string): void {
+function connect(mode: Mode, room: string, relay: string, password = ''): void {
   channel?.close();
   role = mode;
   setConn('Not connected', 'off');
@@ -552,7 +647,7 @@ function connect(mode: Mode, room: string, relay: string): void {
       mode === 'relay'
         ? socketChannel(relay, room)
         : mode === 'host' || mode === 'join'
-          ? peerChannel(room, mode === 'host')
+          ? peerChannel(room, mode === 'host', password)
           : tabsChannel(room);
   } catch (error) {
     setConn(`Could not connect: ${describe(error)}`, 'off');
@@ -1624,6 +1719,13 @@ function waitForHost(text: string): void {
   showLoading(text);
 }
 
+/** A joiner's password did not match the host's. */
+function passwordRefused(room: string): void {
+  if (role === 'join') {
+    waitForHost(`Wrong password for room ${room}. Open \u2699 Setup and type the password your host gave you.`);
+  }
+}
+
 function hostLeft(): void {
   waitForHost('The host left. Waiting for them to come back\u2026');
 }
@@ -1671,6 +1773,8 @@ const countEl = el<HTMLSpanElement>('lv-count');
 const chipsEl = el<HTMLDivElement>('lv-chips');
 const relayInput = el<HTMLInputElement>('relay-url');
 const roomInput = el<HTMLInputElement>('setup-room');
+const passwordInput = el<HTMLInputElement>('setup-password');
+const passwordRow = el<HTMLLabelElement>('password-row');
 const roomHint = el<HTMLParagraphElement>('room-hint');
 const startButton = el<HTMLButtonElement>('setup-start');
 const newRoomButton = el<HTMLButtonElement>('new-room');
@@ -1758,6 +1862,7 @@ function renderSetup(): void {
   );
   const mode = selectedMode();
   relayInput.hidden = mode !== 'relay';
+  passwordRow.hidden = mode !== 'host' && mode !== 'join';
   newRoomButton.hidden = mode === 'join';
   // Joining edits the host's project: this computer's own, and its levels,
   // are not what anyone will be working on.
@@ -1858,9 +1963,11 @@ startButton.addEventListener('click', () => {
     relayInput.focus();
     return;
   }
-  const key = `${mode}|${room}|${mode === 'relay' ? relay : ''}`;
+  // Kept only for this visit: a shared school computer should not remember it.
+  const password = inRoom ? passwordInput.value : '';
+  const key = `${mode}|${room}|${mode === 'relay' ? relay : ''}|${sha256(password)}`;
   if (!channel || key !== activeConnection) {
-    connect(mode, room, relay);
+    connect(mode, room, relay, password);
     activeConnection = key;
   }
   remember('mode', mode);

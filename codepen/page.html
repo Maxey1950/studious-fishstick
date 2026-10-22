@@ -54,7 +54,7 @@
   .row { display: flex; flex-wrap: wrap; gap: 8px; }
   .card button { padding: 6px 12px; }
   .hint { opacity: .7; font-size: 13px; margin: 6px 0; }
-  .card input[type=text], .card input:not([type]) { padding: 6px 8px; width: 100%; box-sizing: border-box; margin-top: 6px; }
+  .card input[type=text], .card input[type=password], .card input:not([type]) { padding: 6px 8px; width: 100%; box-sizing: border-box; margin-top: 6px; }
 
   /* The on/off switch */
   .toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600; }
@@ -164,6 +164,9 @@
       <input id="relay-url" placeholder="Relay address, e.g. wss://your-relay.example">
       <label style="display:block;margin-top:10px">Room code
         <span style="display:flex;gap:8px"><input id="setup-room"><button id="new-room" type="button" style="margin-top:6px">New code</button></span>
+      </label>
+      <label id="password-row" style="display:block;margin-top:10px">Password <span class="hint">&mdash; optional; everyone in the room types the same one</span>
+        <input id="setup-password" type="password" autocomplete="off" placeholder="No password">
       </label>
       <p class="hint" id="room-hint"></p>
     </section>
