@@ -65,7 +65,14 @@ interface Store {
    * blocks are kept, untouched, for when it is switched back on.
    */
   levelsEnabled: boolean;
+  /**
+   * Which project this is. A fresh one, an import or a wiped computer starts a
+   * new one; editing, even deleting every block, keeps it.
+   */
+  id?: string;
 }
+
+const newProjectId = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 /** What a new level starts as: the empty on-start block of a fresh project. */
 const EMPTY_LEVEL =
@@ -77,6 +84,7 @@ let store: Store = {
   shared: {},
   current: 'level1',
   levelsEnabled: false,
+  id: newProjectId(),
 };
 
 /** Levels in play order: level2 before level10, which a plain sort gets wrong. */
@@ -211,6 +219,7 @@ type SyncMessage =
       current: string;
       levelsEnabled?: boolean;
       force?: boolean;
+      id?: string;
     }
   /** The levels switch was flipped. */
   | { type: 'settings'; from: string; levelsEnabled: boolean }
@@ -703,6 +712,7 @@ function stateOf(project: Store): SyncMessage & { type: 'state' } {
     shared: project.shared,
     current: project.current,
     levelsEnabled: project.levelsEnabled,
+    id: project.id,
   };
 }
 
@@ -712,6 +722,7 @@ function stateFields(message: SyncMessage & { type: 'state' }): Partial<Store> {
     levels: { ...message.levels },
     shared: withOwnEditor(message.shared, store.shared),
     levelsEnabled: message.levelsEnabled ?? Object.keys(message.levels).length > 1,
+    id: message.id,
   };
 }
 
@@ -738,11 +749,18 @@ function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): v
       // time they connect, and the host takes nobody's — unless someone opened
       // a project for everyone on purpose.
       if (role === 'join') {
-        // A host whose project is empty, when this computer has the room's
-        // work: their computer was wiped, or it is a new one. Taking theirs
-        // would wipe everyone; they get ours back instead.
+        // A host with an empty, different project, when this computer has the
+        // room's work: their computer was wiped, or it is a new one. Taking
+        // theirs would wipe everyone; they get ours back instead. The same
+        // project emptied on purpose is theirs to empty.
         const ours = adoptedState ? store : earlierCopy;
-        if (!message.force && ours && isEmptyProject(message.levels) && !isEmptyProject(ours.levels)) {
+        if (
+          !message.force &&
+          ours &&
+          message.id !== ours.id &&
+          isEmptyProject(message.levels) &&
+          !isEmptyProject(ours.levels)
+        ) {
           channel?.send({ ...stateOf(ours), force: true });
           if (!adoptedState) {
             store = { ...ours };
@@ -922,12 +940,18 @@ window.addEventListener('message', (event: MessageEvent) => {
     return;
   }
 
-  // The editor asking for its project — at startup, or later on its own, to
-  // start over after an Import it could not finish, say — gets the level on
-  // screen as it is now. What it was given at the last load may be another
-  // level, or older blocks, and it would put that on screen in place of the
-  // work and save it.
-  const asks = (data as { action?: string } | undefined)?.action;
+  // The editor asking for projects. At startup, it gets the level to show.
+  // Later it asks again from time to time — running the game does it — only
+  // to merge in whatever it is told, and the answer then is nothing: it
+  // already has the level, newer than any copy here, and a copy merged in
+  // could put older blocks on screen in place of the work.
+  const asks = (data as { action?: string; id?: string } | undefined)?.action;
+  if (data?.type === 'pxthost' && asks === 'workspacesync' && editorReady) {
+    view()?.postMessage({ type: 'pxthost', id: (data as { id?: string }).id, success: true, projects: [] }, '*');
+    return;
+  }
+  // Starting a project of its own is a load: of the level on screen as it is
+  // now, not the copy from the last load, which may be another level.
   if (data?.type === 'pxthost' && (asks === 'workspacesync' || asks === 'newproject')) {
     if (editorReady) {
       editorLoading();
@@ -949,7 +973,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       if ((token !== undefined && token !== loadToken) || importWhenReady || waitingForHost) {
         return;
       }
-      if (token === undefined && countBlocks(blocksOf(outcome.project)) <= 1) {
+      if (token === undefined && isBlank(outcome.project.text)) {
         // Not an Import: a blank project the editor started by itself.
         putLevelBack();
         return;
@@ -1149,10 +1173,37 @@ function readWorkspace(): void {
  */
 function inBlankProjectOfItsOwn(blocks: string): boolean {
   try {
-    const header = view()?.__arcadeOpts?.projectView?.state?.header;
-    return Boolean(header) && header.collabLoad === undefined && countBlocks(blocks) <= 1;
+    const projectView = view()?.__arcadeOpts?.projectView;
+    const header = projectView?.state?.header;
+    if (!header || header.collabLoad !== undefined || countBlocks(blocks) > 1) {
+      return false;
+    }
+    const files: Record<string, { content?: string }> = projectView.editorFile?.epkg?.files ?? {};
+    return isBlank(
+      Object.fromEntries(Object.entries(files).map(([name, file]) => [name, file?.content ?? '']))
+    );
   } catch {
     return false;
+  }
+}
+
+/**
+ * No blocks and no images: what a new project is. An imported one with only
+ * sprites in it so far is not blank.
+ */
+function isBlank(text: ProjectText): boolean {
+  const images = Object.entries(text).some(
+    ([name, content]) => name.endsWith('.jres') && Object.keys(safeJson(content)).some((key) => key !== '*')
+  );
+  return !images && countBlocks(text['main.blocks'] ?? '') <= 1;
+}
+
+function safeJson(text: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
   }
 }
 
@@ -1754,6 +1805,7 @@ function replaceProject(levels: Levels, shared: ProjectText): void {
     shared,
     current: 'level1' in levels ? 'level1' : names[0],
     levelsEnabled: names.length > 1,
+    id: newProjectId(),
   };
   incoming = { ...shared };
   editedHere = true;
@@ -1770,15 +1822,7 @@ function replaceProject(levels: Levels, shared: ProjectText): void {
 
 /** Replaces everyone's project with ours: an import or a fresh start. */
 function pushStateToEveryone(): void {
-  channel?.send({
-    type: 'state',
-    from: ME,
-    levels: store.levels,
-    shared: store.shared,
-    current: store.current,
-    levelsEnabled: store.levelsEnabled,
-    force: true,
-  });
+  channel?.send({ ...stateOf(store), force: true });
 }
 
 function exportBackup(): void {
@@ -2077,7 +2121,13 @@ el('setup-new').addEventListener('click', () => {
   ) {
     return;
   }
-  store = { levels: { level1: EMPTY_LEVEL }, shared: {}, current: 'level1', levelsEnabled: levelsOn.checked };
+  store = {
+    levels: { level1: EMPTY_LEVEL },
+    shared: {},
+    current: 'level1',
+    levelsEnabled: levelsOn.checked,
+    id: newProjectId(),
+  };
   editedHere = true;
   persist();
   pushStateToEveryone();
@@ -2167,7 +2217,12 @@ void (async () => {
       ...saved,
       // Projects saved before levels could be switched off: on if they have them.
       levelsEnabled: saved.levelsEnabled ?? Object.keys(saved.levels).length > 1,
+      // Projects saved before they had one get one, kept from now on.
+      id: saved.id ?? newProjectId(),
     };
+    if (!saved.id) {
+      persist();
+    }
     if (!(store.current in store.levels)) {
       store.current = levelNames()[0];
     }
