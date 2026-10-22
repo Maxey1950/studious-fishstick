@@ -135,11 +135,21 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function loadStore(): Promise<Store | undefined> {
+/**
+ * Where the project on screen is kept.
+ *
+ * Your own project lives under one key. A room you joined is the host's
+ * project, kept under a key of its own — a copy in case the host's computer
+ * dies, never written over yours.
+ */
+let roomCopyOf: string | undefined;
+const storageKey = () => (roomCopyOf ? `room:${roomCopyOf}` : DB_KEY);
+
+async function loadStore(key = DB_KEY): Promise<Store | undefined> {
   try {
     const db = await openDb();
     return await new Promise((resolve, reject) => {
-      const request = db.transaction(DB_STORE).objectStore(DB_STORE).get(DB_KEY);
+      const request = db.transaction(DB_STORE).objectStore(DB_STORE).get(key);
       request.onsuccess = () => resolve(request.result as Store | undefined);
       request.onerror = () => reject(request.error);
     });
@@ -152,7 +162,7 @@ async function writeStore(): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(DB_STORE, 'readwrite');
-    tx.objectStore(DB_STORE).put(store, DB_KEY);
+    tx.objectStore(DB_STORE).put(store, storageKey());
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -160,18 +170,23 @@ async function writeStore(): Promise<void> {
 
 let persistTimer: number | undefined;
 
-/** Saves shortly after the last change, so a drag is one write. */
+/**
+ * Saves shortly after the last change, so a drag is one write.
+ *
+ * Someone who joined a room saves too, but a copy of the room's project under
+ * its own name (see storageKey): if the host's computer dies, the work is not
+ * gone with it, and their own saved project is never touched.
+ */
 function persist(): void {
   clearTimeout(persistTimer);
-  // Someone who joined a room is editing the host's project, and the host
-  // keeps it. Saving it here too would put a second, older copy of it on this
-  // computer — and replace whatever project of their own they had saved.
-  if (role === 'join') {
+  // Before the host's project has arrived, what is here is this computer's
+  // own, and it is not the room's to keep.
+  if (roomCopyOf && role === 'join' && waitingForHost && !adoptedState) {
     return;
   }
   persistTimer = setTimeout(() => {
     writeStore().then(
-      () => setStatus('Saved'),
+      () => setStatus(roomCopyOf ? 'Saved (a copy of the room)' : 'Saved'),
       (error) => setStatus(`Could not save: ${describe(error)}`)
     );
   }, 400) as unknown as number;
@@ -635,11 +650,25 @@ type Mode = 'tabs' | 'host' | 'join' | 'relay';
  */
 let role: Mode | undefined;
 
+/** The room and password in use, for taking over if the host goes. */
+let connectedRoom = '';
+let connectedPassword = '';
+/** This room's project as this computer last had it, from an earlier visit. */
+let earlierCopy: Store | undefined;
+
 function connect(mode: Mode, room: string, relay: string, password = ''): void {
   channel?.close();
   role = mode;
+  connectedRoom = room;
+  connectedPassword = password;
   setConn('Not connected', 'off');
   if (mode === 'join') {
+    roomCopyOf = room;
+    adoptedState = false;
+    earlierCopy = undefined;
+    void loadStore(`room:${room}`).then((copy) => {
+      earlierCopy = copy;
+    });
     waitForHost(`Getting the project from room ${room}'s host\u2026`);
   }
   try {
@@ -665,23 +694,43 @@ let editedHere = false;
 /** A joiner takes the first full state offered, and only the first. */
 let adoptedState = false;
 
+/** A whole project, as sent to someone joining. */
+function stateOf(project: Store): SyncMessage & { type: 'state' } {
+  return {
+    type: 'state',
+    from: ME,
+    levels: project.levels,
+    shared: project.shared,
+    current: project.current,
+    levelsEnabled: project.levelsEnabled,
+  };
+}
+
+/** What taking a whole project from someone else changes here. */
+function stateFields(message: SyncMessage & { type: 'state' }): Partial<Store> {
+  return {
+    levels: { ...message.levels },
+    shared: withOwnEditor(message.shared, store.shared),
+    levelsEnabled: message.levelsEnabled ?? Object.keys(message.levels).length > 1,
+  };
+}
+
+/** No level has any block in it but an empty "on start". */
+function isEmptyProject(levels: Levels): boolean {
+  return Object.values(levels).every((xml) => countBlocks(xml) <= 1);
+}
+
 function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): void {
   if (!message || message.from === ME) {
     return;
   }
   switch (message.type) {
     case 'hello':
-      (reply ?? ((m: SyncMessage) => channel?.send(m)))({
-        type: 'state',
-        from: ME,
-        levels: store.levels,
-        shared: store.shared,
-        current: store.current,
-        levelsEnabled: store.levelsEnabled,
-      });
+      (reply ?? ((m: SyncMessage) => channel?.send(m)))(stateOf(store));
       return;
 
-    case 'state':
+    case 'state': {
+      const levelBefore = store.current;
       // Someone else's project replaces ours only if nothing has been done
       // here yet — joining is not a reason to lose work — or if they imported
       // a project on purpose.
@@ -689,20 +738,31 @@ function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): v
       // time they connect, and the host takes nobody's — unless someone opened
       // a project for everyone on purpose.
       if (role === 'join') {
+        // A host whose project is empty, when this computer has the room's
+        // work: their computer was wiped, or it is a new one. Taking theirs
+        // would wipe everyone; they get ours back instead.
+        const ours = adoptedState ? store : earlierCopy;
+        if (!message.force && ours && isEmptyProject(message.levels) && !isEmptyProject(ours.levels)) {
+          channel?.send({ ...stateOf(ours), force: true });
+          if (!adoptedState) {
+            store = { ...ours };
+          }
+          setStatus("The host's project was empty \u2014 sent them this room's work");
+        } else {
+          store = { ...store, ...stateFields(message) };
+        }
         waitingForHost = false;
       } else if (role === 'host' ? !message.force : !message.force && (editedHere || adoptedState)) {
         return;
+      } else {
+        store = { ...store, ...stateFields(message) };
       }
       // Joining for the first time lands on the host's level; after that,
       // everyone is on a level of their own and rejoining moves nobody.
       const firstJoin = role === 'join' && !editorStarted;
+      const current = !firstJoin && levelBefore in store.levels ? levelBefore : message.current;
+      store.current = current;
       adoptedState = true;
-      store = {
-        levels: { ...message.levels },
-        shared: withOwnEditor(message.shared, store.shared),
-        current: !firstJoin && store.current in message.levels ? store.current : message.current,
-        levelsEnabled: message.levelsEnabled ?? Object.keys(message.levels).length > 1,
-      };
       if (!(store.current in store.levels)) {
         store.current = levelNames()[0];
       }
@@ -711,6 +771,7 @@ function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): v
       renderLevels();
       void showProject();
       return;
+    }
 
     case 'blocks':
       // Someone who joined takes the host's whole project before anything
@@ -861,6 +922,19 @@ window.addEventListener('message', (event: MessageEvent) => {
     return;
   }
 
+  // The editor asking for its project — at startup, or later on its own, to
+  // start over after an Import it could not finish, say — gets the level on
+  // screen as it is now. What it was given at the last load may be another
+  // level, or older blocks, and it would put that on screen in place of the
+  // work and save it.
+  const asks = (data as { action?: string } | undefined)?.action;
+  if (data?.type === 'pxthost' && (asks === 'workspacesync' || asks === 'newproject')) {
+    if (editorReady) {
+      editorLoading();
+    }
+    project = buildProject();
+  }
+
   const outcome = handleEditorMessage(event.data, project);
   switch (outcome.kind) {
     case 'reply':
@@ -873,6 +947,11 @@ window.addEventListener('message', (event: MessageEvent) => {
       // itself — its own Import, of a .png or .mkcd — and is real.
       const token = outcome.project.header?.collabLoad;
       if ((token !== undefined && token !== loadToken) || importWhenReady || waitingForHost) {
+        return;
+      }
+      if (token === undefined && countBlocks(blocksOf(outcome.project)) <= 1) {
+        // Not an Import: a blank project the editor started by itself.
+        putLevelBack();
         return;
       }
       // Images, tilemaps and extensions arrive here, never through the
@@ -1021,6 +1100,10 @@ function readWorkspace(): void {
   if (!blocks) {
     return;
   }
+  if (inBlankProjectOfItsOwn(blocks)) {
+    putLevelBack();
+    return;
+  }
   if (!workspaceLoaded) {
     if (countBlocks(blocks) >= countBlocks(givenBlocks)) {
       workspaceLoaded = true;
@@ -1036,10 +1119,61 @@ function readWorkspace(): void {
     return;
   }
   if (blocks !== lastPolled) {
+    if (lastPolled !== undefined && looksWiped(lastPolled, blocks)) {
+      // Most of the blocks gone at once is what a canvas looks like midway
+      // through being rebuilt, as well as a real "delete everything". Sending
+      // the first would wipe the level for everyone, so it has to still be
+      // the same a little later to count.
+      if (wipeSeen?.blocks !== blocks) {
+        wipeSeen = { blocks, at: Date.now() };
+        setTimeout(readWorkspace, WIPE_CONFIRM_MS + 50);
+        return;
+      }
+      if (Date.now() - wipeSeen.at < WIPE_CONFIRM_MS) {
+        return;
+      }
+    }
+    wipeSeen = undefined;
     lastPolled = blocks;
     localChange(blocks);
   }
 }
+
+/**
+ * Whether the editor has wandered off into a new, empty project of its own.
+ *
+ * MakeCode starts one when it gives up on something — an Import it could not
+ * read, for one — and it is not anything anyone here asked for: there is no
+ * home screen to come back from. Saved, it would wipe the level for everyone.
+ * A project it imported has blocks in it, and is taken as real.
+ */
+function inBlankProjectOfItsOwn(blocks: string): boolean {
+  try {
+    const header = view()?.__arcadeOpts?.projectView?.state?.header;
+    return Boolean(header) && header.collabLoad === undefined && countBlocks(blocks) <= 1;
+  } catch {
+    return false;
+  }
+}
+
+/** Puts the level back in the editor after it wandered off; see above. */
+function putLevelBack(): void {
+  if (!workspaceLoaded || Date.now() < settlingUntil || importWhenReady) {
+    return;
+  }
+  showLoading(`Putting ${store.current} back\u2026`);
+  setStatus('The editor started a blank project by itself \u2014 your level was put back');
+  reloadLevel();
+}
+
+/** A drop to a third of the blocks or fewer, from a level that had some. */
+function looksWiped(before: string, after: string): boolean {
+  const had = countBlocks(before);
+  return had >= 6 && countBlocks(after) <= had / 3;
+}
+
+let wipeSeen: { blocks: string; at: number } | undefined;
+const WIPE_CONFIRM_MS = 3000;
 
 function localChange(blocks: string): void {
   // MakeCode restarts the game itself after a change made here, and that run
@@ -1271,6 +1405,25 @@ let importWhenReady = false;
 const READY_SETTLE_MS = 1000;
 
 /**
+ * The editor is about to load a project, ours or its own: until it has, what
+ * is on its canvas is on the way out or half built, and nothing is read from
+ * it or sent.
+ */
+function editorLoading(settle = true): void {
+  // A restart queued for the old level would run its program again.
+  clearTimeout(simTimer);
+  sync = new SyncState(DEFAULT_SYNC_OPTIONS);
+  clearTimeout(syncTimer);
+  lastPolled = undefined;
+  agreed = '';
+  workspaceLoaded = false;
+  // A load of ours settles from when it is sent; one the editor started, now.
+  if (settle) {
+    settlingUntil = Math.max(settlingUntil, Date.now() + SETTLE_MS);
+  }
+}
+
+/**
  * Hands the editor the current level afresh, and guards it while it loads.
  *
  * A load still in progress is never interrupted. Handing MakeCode a project
@@ -1281,15 +1434,9 @@ const READY_SETTLE_MS = 1000;
  * whatever is current by then.
  */
 function reloadLevel(): void {
-  // A restart queued for the old level would run its program again.
-  clearTimeout(simTimer);
   // This load picks up any files a pending reload was waiting to add.
   clearTimeout(idleReloadTimer);
-  sync = new SyncState(DEFAULT_SYNC_OPTIONS);
-  clearTimeout(syncTimer);
-  lastPolled = undefined;
-  agreed = '';
-  workspaceLoaded = false;
+  editorLoading(false);
   project = buildProject();
 
   clearTimeout(importTimer);
@@ -1661,6 +1808,9 @@ updateGameButton.addEventListener('click', () => {
 const statusEl = el<HTMLSpanElement>('status');
 const loadingEl = el<HTMLDivElement>('loading');
 const loadingText = el<HTMLDivElement>('loading-text');
+const takeOverButton = el<HTMLButtonElement>('take-over');
+const takeOverHint = el<HTMLParagraphElement>('take-over-hint');
+takeOverButton.addEventListener('click', takeOver);
 const folderInput = el<HTMLInputElement>('folder-input');
 const backupInput = el<HTMLInputElement>('backup-input');
 
@@ -1697,6 +1847,7 @@ function setConn(text: string, state: 'on' | 'wait' | 'off'): void {
 function showLoading(text: string): void {
   loadingText.textContent = text;
   loadingEl.hidden = false;
+  showTakeOver(false);
 }
 
 function hideLoading(): void {
@@ -1728,6 +1879,29 @@ function passwordRefused(room: string): void {
 
 function hostLeft(): void {
   waitForHost('The host left. Waiting for them to come back\u2026');
+  // Only with the room's project here to carry on with.
+  showTakeOver(adoptedState);
+}
+
+function showTakeOver(show: boolean): void {
+  takeOverButton.hidden = !show;
+  takeOverHint.hidden = !show;
+}
+
+/**
+ * Carries on as the room's host, with this computer's copy of the project,
+ * when the host's computer is gone. The copy stays a copy — kept under the
+ * room's name, not over this person's own project — and everyone else in the
+ * room joins it as they would the old host.
+ */
+function takeOver(): void {
+  showTakeOver(false);
+  waitingForHost = false;
+  hideLoading();
+  connect('host', connectedRoom, '', connectedPassword);
+  activeConnection = `host|${connectedRoom}||${sha256(connectedPassword)}`;
+  persist();
+  setStatus("You are hosting this room now, from this computer's copy");
 }
 
 function describe(error: unknown): string {

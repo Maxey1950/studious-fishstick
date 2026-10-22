@@ -30,7 +30,11 @@ with the VS Code extension in `../src`.
   person chooses "Host a room": the project is theirs, and only their computer
   keeps it. Friends choose "Join" with the same code and edit the host's
   project; nothing saved on their own computers is changed or sent. If the host
-  leaves, the others wait for them to come back. A room can have a password: everyone
+  leaves, the others wait for them to come back — or, if the host's computer is
+  gone for good, one of them presses "Host from here" and carries on: joiners
+  keep a copy of the room's project (separately from their own). A host who
+  comes back with an empty project, from a wiped computer, is sent the room's
+  work by a joiner instead of wiping everyone. A room can have a password: everyone
   types the same one, and it is checked both ways (a joiner will not trust a
   host who does not know it either) without ever being sent. "Just this computer" syncs tabs in
   one browser. "Relay server" uses a WebSocket relay; `relay.mjs` is a minimal one.

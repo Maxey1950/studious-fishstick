@@ -31,7 +31,7 @@
   #stage { position: relative; flex: 1; }
   #editor { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
   #loading {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 14px; align-items: center; justify-content: center; text-align: center; padding: 0 24px;
     background: #1e1e2e; color: #f0f0f6; font: 600 22px system-ui, sans-serif;
   }
 
@@ -96,6 +96,8 @@
     background: #7b5cff !important; border-color: #9a82ff !important;
   }
   .primary:hover { background: #8d72ff !important; }
+  #take-over { width: auto; padding: 10px 22px !important; }
+  #take-over-hint { max-width: 420px; font: 400 14px/1.5 system-ui, sans-serif; }
 </style>
 
 <div id="app">
@@ -113,7 +115,11 @@
   </div>
   <div id="stage">
     <iframe id="editor" allow="usb; autoplay; camera; microphone"></iframe>
-    <div id="loading" hidden><div id="loading-text">Loading&hellip;</div></div>
+    <div id="loading" hidden>
+      <div id="loading-text">Loading&hellip;</div>
+      <button id="take-over" class="primary" hidden title="Carry on with this computer's copy of the project; the others join you">Host from here</button>
+      <p id="take-over-hint" class="hint" hidden>If the host's computer is gone for good, carry on with the copy on this computer. Everyone else in the room joins you.</p>
+    </div>
   </div>
 </div>
 
