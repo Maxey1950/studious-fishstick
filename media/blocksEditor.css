@@ -1,0 +1,203 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+#blockly {
+  position: absolute;
+  inset: 0;
+}
+
+/* Pushed down when the status banner is visible. */
+body:has(.status:not([hidden])) #blockly {
+  top: 2.2rem;
+}
+
+.status {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  height: 2.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--vscode-inputValidation-warningBackground, #352a05);
+  color: var(--vscode-inputValidation-warningForeground, inherit);
+  border-bottom: 1px solid var(--vscode-inputValidation-warningBorder, #7a6a1f);
+}
+
+/* MakeCode refers to its toolbox category icons by codepoint in this font. */
+@font-face {
+  font-family: 'MakeCode Icons';
+  src: url('fonts/makecode-icons.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
+.arcade-cat-icon {
+  font-family: 'MakeCode Icons' !important;
+  font-style: normal;
+  font-weight: normal;
+  display: inline-block;
+  width: 1.4em;
+  margin-right: 0.45em;
+  text-align: center;
+  /* The glyphs are designed at a larger optical size than the label text. */
+  font-size: 1.15em;
+  line-height: 1;
+  vertical-align: -0.1em;
+}
+
+/* MakeCode's toolbox rows are taller and roomier than Blockly's default, and
+   lay the icon out beside the label rather than on top of it. */
+.blocklyToolboxCategory {
+  padding: 0.35rem 0.6rem;
+}
+
+.blocklyTreeRowContentContainer {
+  display: flex;
+  align-items: center;
+  gap: 0.1em;
+}
+
+.blocklyToolboxDiv {
+  min-width: 9.5rem;
+}
+
+.arcade-cat-label {
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+}
+
+/* Blockly draws its own chrome; keep the canvas transparent so the VS Code
+   theme's editor background shows through in both light and dark themes. */
+.blocklyMainBackground {
+  stroke: none;
+}
+
+.injectionDiv {
+  background: transparent;
+}
+
+/* ---- Arcade image painter ---------------------------------------------- */
+
+.arcade-painter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  max-width: min(90vw, 26rem);
+}
+
+.arcade-painter-canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  cursor: crosshair;
+  border-radius: 4px;
+  /* The canvas is drawn at cell resolution; keep the edges hard when it scales. */
+  image-rendering: pixelated;
+  touch-action: none;
+}
+
+.arcade-painter-palette {
+  /* Arcade's 16 colours, as two even rows of eight. */
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.25rem;
+  justify-items: stretch;
+}
+
+.arcade-colour-picker {
+  padding: 0.6rem;
+  max-width: 14rem;
+}
+
+.arcade-swatch {
+  width: 100%;
+  min-width: 1.4rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* The transparent slot reads as a checkerboard, never as black. */
+.arcade-swatch-transparent {
+  background-image:
+    linear-gradient(45deg, #bbb 25%, transparent 25%),
+    linear-gradient(-45deg, #bbb 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #bbb 75%),
+    linear-gradient(-45deg, transparent 75%, #bbb 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-color: #fff;
+}
+
+.arcade-swatch-selected {
+  border-color: var(--vscode-focusBorder, #0078d4);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 0 0 2px var(--vscode-focusBorder, #0078d4);
+}
+
+.arcade-painter-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.arcade-painter-size {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.arcade-painter-button {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground, #5f6a79);
+  color: var(--vscode-button-secondaryForeground, #fff);
+  cursor: pointer;
+  font: inherit;
+}
+
+.arcade-painter-button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, #4c5561);
+}
+
+/* ---- MakeCode engine (the real Arcade editor, embedded) ----------------- */
+
+body.makecode-engine #editor,
+body.makecode-engine object#editor,
+body.makecode-engine embed#editor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+body.makecode-engine:has(.status:not([hidden])) #editor {
+  top: 2.2rem;
+  height: calc(100% - 2.2rem);
+}

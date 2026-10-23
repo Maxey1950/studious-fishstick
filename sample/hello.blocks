@@ -1,0 +1,18 @@
+<xml xmlns="https://developers.google.com/blockly/xml">
+  <block type="controls_repeat_ext" id="repeat1" x="40" y="40">
+    <value name="TIMES">
+      <shadow type="math_number" id="times1">
+        <field name="NUM">3</field>
+      </shadow>
+    </value>
+    <statement name="DO">
+      <block type="text_print" id="print1">
+        <value name="TEXT">
+          <shadow type="text" id="text1">
+            <field name="TEXT">Hello from the blocks editor</field>
+          </shadow>
+        </value>
+      </block>
+    </statement>
+  </block>
+</xml>

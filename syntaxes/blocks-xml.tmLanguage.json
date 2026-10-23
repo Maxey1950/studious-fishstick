@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Blocks (Blockly XML)",
+  "scopeName": "text.xml",
+  "patterns": [{ "include": "#tag" }, { "include": "#comment" }],
+  "repository": {
+    "comment": {
+      "name": "comment.block.xml",
+      "begin": "<!--",
+      "end": "-->"
+    },
+    "tag": {
+      "name": "meta.tag.xml",
+      "begin": "(</?)([-_a-zA-Z0-9:.]+)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.xml" },
+        "2": { "name": "entity.name.tag.xml" }
+      },
+      "end": "(/?>)",
+      "endCaptures": { "1": { "name": "punctuation.definition.tag.xml" } },
+      "patterns": [
+        { "name": "entity.other.attribute-name.xml", "match": "[-_a-zA-Z0-9:.]+(?==)" },
+        { "name": "string.quoted.double.xml", "begin": "\"", "end": "\"" },
+        { "name": "string.quoted.single.xml", "begin": "'", "end": "'" }
+      ]
+    }
+  }
+}

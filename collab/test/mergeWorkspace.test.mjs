@@ -1,0 +1,431 @@
+/**
+ * Tests that applying a peer's blocks touches only the blocks that changed.
+ *
+ * This is the difference between collaboration and a slideshow: rebuilding the
+ * whole canvas on every incoming change is what made the editor look like it
+ * was reloading. The cases below are driven from the real Arcade sample, whose
+ * top-level block carries no id at all — the case that makes id-matching alone
+ * insufficient.
+ */
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { build } from 'esbuild';
+import { JSDOM } from 'jsdom';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readFile, writeFile, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, '../..');
+
+const { outputFiles } = await build({
+  entryPoints: [join(root, 'src/webview/makecode/sameOrigin.ts')],
+  bundle: true,
+  write: false,
+  format: 'esm',
+  platform: 'neutral',
+  target: 'es2022',
+});
+const dir = await mkdtemp(join(tmpdir(), 'merge-'));
+const module = join(dir, 'sameOrigin.mjs');
+await writeFile(module, outputFiles[0].text);
+const { mergeIntoWorkspace, baseIndexOf } = await import(module);
+
+const { window } = new JSDOM('');
+globalThis.DOMParser = window.DOMParser;
+const parse = (xml) => {
+  const doc = new window.DOMParser().parseFromString(xml, 'text/xml');
+  return doc.documentElement;
+};
+
+/**
+ * A Blockly and workspace stand-in that records what was disposed and built.
+ *
+ * Blocks are just the elements they came from, so `blockToDom` is the identity
+ * — which is the honest model: a block serializes back to what created it.
+ */
+function harness(xml) {
+  const disposed = [];
+  const built = [];
+  const blocks = Array.from(parse(xml).children)
+    .filter((child) => child.tagName.toLowerCase() === 'block')
+    .map((element, index) => ({
+      id: element.getAttribute('id') ?? `generated-${index}`,
+      element,
+      dispose() {
+        disposed.push(this);
+        workspace.blocks = workspace.blocks.filter((block) => block !== this);
+      },
+    }));
+
+  const workspace = {
+    blocks,
+    getTopBlocks: () => [...workspace.blocks],
+  };
+
+  const Blockly = {
+    Xml: {
+      blockToDom: (block) => block.element,
+      domToBlock: (element) => {
+        built.push(element);
+        const block = { id: element.getAttribute('id') ?? 'new', element };
+        workspace.blocks.push(block);
+        return block;
+      },
+      domToVariables: () => {},
+    },
+  };
+
+  return { Blockly, workspace, disposed, built };
+}
+
+const samples = {
+  hello: await readFile(join(root, 'sample/hello.blocks'), 'utf8'),
+  arcade: await readFile(join(root, 'sample/arcade-real.blocks'), 'utf8'),
+};
+
+for (const [name, xml] of Object.entries(samples)) {
+  test(`${name}: identical blocks are left standing`, () => {
+    const { Blockly, workspace, disposed, built } = harness(xml);
+    assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(xml)), undefined);
+    assert.deepEqual(disposed, [], 'nothing should have been disposed');
+    assert.deepEqual(built, [], 'nothing should have been rebuilt');
+  });
+
+  test(`${name}: reordered attributes and whitespace are not a change`, () => {
+    const { Blockly, workspace, disposed, built } = harness(xml);
+    // Blockly spells the same block differently from the file; the merge must
+    // compare meaning, not text.
+    const respelled = xml.replace(/<block type="([^"]+)" x="([^"]+)" y="([^"]+)"/g,
+      '<block y="$3" x="$2" type="$1"');
+    assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(respelled)), undefined);
+    assert.deepEqual(disposed, []);
+    assert.deepEqual(built, []);
+  });
+}
+
+test('hello: a changed block is the only one rebuilt', () => {
+  const xml = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="a" id="one" x="0" y="0"><field name="N">1</field></block>` +
+    `<block type="b" id="two" x="0" y="80"><field name="N">2</field></block>` +
+    `</xml>`;
+  const changed = xml.replace('>2<', '>3<');
+
+  const { Blockly, workspace, disposed, built } = harness(xml);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(changed)), undefined);
+  assert.equal(disposed.length, 1);
+  assert.equal(disposed[0].id, 'two');
+  assert.equal(built.length, 1);
+  assert.equal(built[0].getAttribute('id'), 'two');
+});
+
+test('a deleted block is removed and nothing else touched', () => {
+  const xml = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="a" id="one" x="0" y="0"/>` +
+    `<block type="b" id="two" x="0" y="80"/>` +
+    `</xml>`;
+  const without = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="a" id="one" x="0" y="0"/></xml>`;
+
+  const { Blockly, workspace, disposed, built } = harness(xml);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(without)), undefined);
+  assert.deepEqual(disposed.map((block) => block.id), ['two']);
+  assert.deepEqual(built, []);
+});
+
+test('an id-less incoming block matches the canvas block it describes', () => {
+  // How MakeCode actually saves: the canvas has ids, the file does not.
+  const onCanvas = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="a" id="assigned-by-blockly" x="0" y="0"/></xml>`;
+  const fromFile = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="a" x="0" y="0"/></xml>`;
+
+  const { Blockly, workspace, disposed, built } = harness(onCanvas);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(fromFile)), undefined);
+  assert.deepEqual(disposed, [], 'a missing id is not a different block');
+  assert.deepEqual(built, []);
+});
+
+test('an added block is built without disturbing the others', () => {
+  const before = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="a" id="one" x="0" y="0"/></xml>`;
+  const after = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="a" id="one" x="0" y="0"/>` +
+    `<block type="b" id="two" x="0" y="80"/></xml>`;
+
+  const { Blockly, workspace, disposed, built } = harness(before);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(after)), undefined);
+  assert.deepEqual(disposed, []);
+  assert.deepEqual(built.map((element) => element.getAttribute('id')), ['two']);
+});
+
+test('an empty document against a full canvas refuses to merge', () => {
+  const xml = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="a" id="one" x="0" y="0"/></xml>`;
+  const { Blockly, workspace } = harness(xml);
+  const empty = parse(`<xml xmlns="https://developers.google.com/blockly/xml"></xml>`);
+  assert.match(mergeIntoWorkspace(Blockly, workspace, empty), /no blocks/);
+});
+
+test('a Blockly that cannot load variables still merges the blocks', () => {
+  // Every real Arcade file opens with a <variables> block. If loading them
+  // threw, the whole merge used to fail and the change fell back to
+  // importproject — a full editor reload on exactly the common case.
+  const xml = samples.arcade;
+  const { Blockly, workspace, disposed, built } = harness(xml);
+  Blockly.Xml.domToVariables = () => {
+    throw new TypeError('domToVariables is not a function');
+  };
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(xml)), undefined);
+  assert.deepEqual(disposed, []);
+  assert.deepEqual(built, []);
+});
+
+// --- Two people editing at once -------------------------------------------
+//
+// The case that matters most and is hardest to see alone: a change composed
+// before the other person's block existed cannot mention it, and reading that
+// silence as a deletion is how collaborators destroy each other's work.
+
+const XML = (...blocks) =>
+  `<xml xmlns="https://developers.google.com/blockly/xml">${blocks.join('')}</xml>`;
+const BLOCK = (type, id, y = 0) => `<block type="${type}" id="${id}" x="0" y="${y}"/>`;
+
+test('a block added here survives a change that predates it', () => {
+  const base = XML(BLOCK('shared', 'shared-1'));
+  // We added ours; they added theirs, without ever having seen ours.
+  const onCanvas = XML(BLOCK('shared', 'shared-1'), BLOCK('mine', 'mine-1', 80));
+  const fromThem = XML(BLOCK('shared', 'shared-1'), BLOCK('theirs', 'theirs-1', 160));
+
+  const { Blockly, workspace, disposed, built } = harness(onCanvas);
+  assert.equal(
+    mergeIntoWorkspace(Blockly, workspace, parse(fromThem), baseIndexOf(base)),
+    undefined
+  );
+
+  assert.deepEqual(disposed, [], 'our block is not in their change, but it is not deleted');
+  assert.deepEqual(built.map((e) => e.getAttribute('id')), ['theirs-1'], 'theirs arrives');
+  assert.deepEqual(
+    workspace.blocks.map((b) => b.id).sort(),
+    ['mine-1', 'shared-1', 'theirs-1'],
+    'both new blocks are on the canvas'
+  );
+});
+
+test('a block they really deleted is still deleted', () => {
+  // Present when the two sides last agreed, absent from what they sent: gone.
+  const base = XML(BLOCK('shared', 'shared-1'), BLOCK('doomed', 'doomed-1', 80));
+  const onCanvas = base;
+  const fromThem = XML(BLOCK('shared', 'shared-1'));
+
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+  assert.equal(
+    mergeIntoWorkspace(Blockly, workspace, parse(fromThem), baseIndexOf(base)),
+    undefined
+  );
+  assert.deepEqual(disposed.map((b) => b.id), ['doomed-1']);
+});
+
+test('without a base, the incoming change is still taken as authoritative', () => {
+  // The old behaviour, kept for the paths where nothing is known to be agreed.
+  const onCanvas = XML(BLOCK('shared', 'shared-1'), BLOCK('mine', 'mine-1', 80));
+  const fromThem = XML(BLOCK('shared', 'shared-1'));
+
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(fromThem)), undefined);
+  assert.deepEqual(disposed.map((b) => b.id), ['mine-1']);
+});
+
+test('an unreadable base never deletes anything it cannot vouch for', () => {
+  assert.equal(baseIndexOf('<xml><block'), undefined);
+  assert.equal(baseIndexOf(''), undefined);
+});
+
+test('an id-less base still recognizes its blocks by content', () => {
+  // How MakeCode actually saves: no ids in the file, ids on the canvas.
+  const base = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="shared" x="0" y="0"/></xml>`;
+  const onCanvas = XML(BLOCK('shared', 'assigned-by-blockly'), BLOCK('mine', 'mine-1', 80));
+  const fromThem = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="shared" x="0" y="0"/><block type="theirs" x="0" y="160"/></xml>`;
+
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+  assert.equal(
+    mergeIntoWorkspace(Blockly, workspace, parse(fromThem), baseIndexOf(base)),
+    undefined
+  );
+  assert.deepEqual(disposed, [], 'ours is new, theirs is unchanged, nothing is lost');
+});
+
+test('the merge reports which blocks it changed', () => {
+  // What the highlight needs: the blocks a collaborator's change actually
+  // altered, so they can be pointed out rather than appearing silently.
+  const before = XML(BLOCK('kept', 'kept-1'), BLOCK('edited', 'edited-1', 80));
+  const after = XML(
+    BLOCK('kept', 'kept-1'),
+    `<block type="edited" id="edited-1" x="0" y="240"/>`,
+    BLOCK('added', 'added-1', 320)
+  );
+
+  const { Blockly, workspace } = harness(before);
+  const touched = [];
+  assert.equal(
+    mergeIntoWorkspace(Blockly, workspace, parse(after), baseIndexOf(before), touched),
+    undefined
+  );
+  assert.deepEqual(touched.sort(), ['added-1', 'edited-1'], 'moved and added, not the untouched one');
+});
+
+test('nothing is reported when nothing changed', () => {
+  const xml = XML(BLOCK('a', 'a-1'));
+  const { Blockly, workspace } = harness(xml);
+  const touched = [];
+  mergeIntoWorkspace(Blockly, workspace, parse(xml), baseIndexOf(xml), touched);
+  assert.deepEqual(touched, []);
+});
+
+test('a base in the wrong spelling does not duplicate the canvas', () => {
+  // The bug this guards: the base has to be a reading of the workspace, because
+  // MakeCode and Blockly write the same blocks differently. Indexed from the
+  // file, every canvas block looks like a local addition and the incoming
+  // copies get built alongside them — which is what joining a session did.
+  const onCanvas = XML(BLOCK('shared', 'canvas-1'));
+  // The same block as the other side writes it: no id, as MakeCode saves.
+  const fromThem = `<xml xmlns="https://developers.google.com/blockly/xml">` +
+    `<block type="shared" x="0" y="0"/><block type="theirs" x="0" y="80"/></xml>`;
+  // A base in the workspace's own spelling: the canvas block, ids and all.
+  const base = baseIndexOf(onCanvas);
+
+  const { Blockly, workspace, built } = harness(onCanvas);
+  assert.equal(mergeIntoWorkspace(Blockly, workspace, parse(fromThem), base), undefined);
+
+  assert.deepEqual(
+    workspace.blocks.map((b) => b.element.getAttribute('type')).sort(),
+    ['shared', 'theirs'],
+    'one of each, not two shared'
+  );
+  assert.equal(built.length, 1, 'only their new block is built');
+});
+
+test('a block stacked exactly on another is not left there', () => {
+  // The backstop. If matching ever misses, the copy lands precisely on top of
+  // the original, where it is unusable and nearly invisible.
+  const onCanvas = XML(BLOCK('same', 'first'), BLOCK('same', 'second'));
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+
+  // Both blocks are identical in content and position, so one must go.
+  mergeIntoWorkspace(Blockly, workspace, parse(onCanvas), baseIndexOf(onCanvas));
+  assert.equal(disposed.length, 1, 'the stacked copy is removed');
+  assert.equal(workspace.blocks.length, 1);
+});
+
+test('identical blocks in different places are both kept', () => {
+  // Position is part of the comparison, so two of the same block side by side
+  // are a thing somebody built on purpose.
+  const onCanvas = XML(BLOCK('same', 'first', 0), BLOCK('same', 'second', 200));
+  const { Blockly, workspace, disposed } = harness(onCanvas);
+  mergeIntoWorkspace(Blockly, workspace, parse(onCanvas), baseIndexOf(onCanvas));
+  assert.deepEqual(disposed, []);
+  assert.equal(workspace.blocks.length, 2);
+});
+
+/**
+ * The real Blockly, as far as positions go: blockToDom leaves x and y out,
+ * blockToDomWithXY puts them in, domToBlock builds at the origin, and blocks
+ * know where they are and can be moved.
+ */
+function positionedHarness(xml) {
+  const built = [];
+  const disposed = [];
+  const strip = (element) => {
+    const copy = element.cloneNode(true);
+    copy.removeAttribute('x');
+    copy.removeAttribute('y');
+    return copy;
+  };
+  const make = (element, x, y) => ({
+    id: element.getAttribute('id'),
+    element: strip(element),
+    x,
+    y,
+    getRelativeToSurfaceXY() {
+      return { x: this.x, y: this.y };
+    },
+    moveBy(dx, dy) {
+      this.x += dx;
+      this.y += dy;
+    },
+    dispose() {
+      disposed.push(this);
+      workspace.blocks = workspace.blocks.filter((block) => block !== this);
+    },
+  });
+  const workspace = {
+    RTL: false,
+    blocks: Array.from(parse(xml).children)
+      .filter((child) => child.tagName.toLowerCase() === 'block')
+      .map((element) => make(element, Number(element.getAttribute('x')), Number(element.getAttribute('y')))),
+    getTopBlocks: () => [...workspace.blocks],
+  };
+  const Blockly = {
+    Xml: {
+      blockToDom: (block) => block.element.cloneNode(true),
+      blockToDomWithXY: (block) => {
+        const element = block.element.cloneNode(true);
+        element.setAttribute('x', String(block.x));
+        element.setAttribute('y', String(block.y));
+        return element;
+      },
+      domToBlock: (element) => {
+        built.push(element);
+        const block = make(element, 0, 0);
+        workspace.blocks.push(block);
+        return block;
+      },
+      domToVariables: () => {},
+    },
+  };
+  const at = (id) => {
+    const block = workspace.blocks.find((b) => b.id === id);
+    return block && [block.x, block.y];
+  };
+  return { Blockly, workspace, built, disposed, at };
+}
+
+test('with real positions, blocks nobody touched are left standing', () => {
+  const xml = XML(BLOCK('a', 'a-1', 40), BLOCK('b', 'b-1', 300));
+  const { Blockly, workspace, built, disposed } = positionedHarness(xml);
+  mergeIntoWorkspace(Blockly, workspace, parse(xml), baseIndexOf(xml));
+  assert.deepEqual(built, []);
+  assert.deepEqual(disposed, []);
+});
+
+test('a block someone else added lands where they put it', () => {
+  const before = XML(BLOCK('a', 'a-1', 40));
+  const after = XML(BLOCK('a', 'a-1', 40), '<block type="b" id="b-1" x="420" y="260"/>');
+  const { Blockly, workspace, at } = positionedHarness(before);
+  mergeIntoWorkspace(Blockly, workspace, parse(after), baseIndexOf(before));
+  assert.deepEqual(at('b-1'), [420, 260]);
+  assert.deepEqual(at('a-1'), [0, 40]);
+});
+
+test('a block someone else moved is moved here, not rebuilt', () => {
+  const before = XML('<block type="a" id="a-1" x="10" y="20"/>');
+  const after = XML('<block type="a" id="a-1" x="500" y="330"/>');
+  const { Blockly, workspace, built, disposed, at } = positionedHarness(before);
+  const touched = [];
+  mergeIntoWorkspace(Blockly, workspace, parse(after), baseIndexOf(before), touched);
+  assert.deepEqual(at('a-1'), [500, 330]);
+  assert.deepEqual(built, []);
+  assert.deepEqual(disposed, []);
+  assert.deepEqual(touched, ['a-1']);
+});
+
+test('a changed block is rebuilt where it was put', () => {
+  const before = XML('<block type="a" id="a-1" x="10" y="20"><field name="N">1</field></block>');
+  const after = XML('<block type="a" id="a-1" x="210" y="90"><field name="N">2</field></block>');
+  const { Blockly, workspace, at } = positionedHarness(before);
+  mergeIntoWorkspace(Blockly, workspace, parse(after), baseIndexOf(before));
+  assert.deepEqual(at('a-1'), [210, 90]);
+});
