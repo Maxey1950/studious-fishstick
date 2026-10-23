@@ -94,7 +94,6 @@ function levelNames(): string[] {
   );
 }
 
-/** The current level as a MakeCode project: its blocks plus the shared files. */
 /**
  * Which load of the editor this is.
  *
@@ -115,6 +114,7 @@ Object.defineProperty(window, 'arcadeCollabLoads', { get: () => loadToken });
  */
 let givenBlocks = EMPTY_LEVEL;
 
+/** The current level as a MakeCode project: its blocks plus the shared files. */
 function buildProject(): ArcadeProject {
   givenBlocks = store.levels[store.current] ?? EMPTY_LEVEL;
   const level = createProject(store.current, givenBlocks);
@@ -134,13 +134,20 @@ const DB_NAME = 'arcade-collab';
 const DB_STORE = 'state';
 const DB_KEY = 'project';
 
+/** One connection, kept: opening one per save left hundreds open over a session. */
+let db: Promise<IDBDatabase> | undefined;
+
 function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  db ??= new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);
     request.onupgradeneeded = () => request.result.createObjectStore(DB_STORE);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  }).catch((error) => {
+    db = undefined;
+    throw error;
   });
+  return db;
 }
 
 /**
@@ -580,7 +587,7 @@ function peerChannel(roomName: string, hosting: boolean, password: string): Chan
       if (error.type === 'unavailable-id') {
         // Someone else is hosting this code — or this page was just reloaded
         // and the server still holds the old one for a few seconds.
-        setConn(`Room ${room} already has a host. Choose "Join", or a new code. Retrying...`, 'off');
+        setConn(`Room ${room} is taken: someone else hosts it, or the last host only just left. Retrying...`, 'off');
         reset();
         retry(5000);
         return;
@@ -664,6 +671,8 @@ let connectedRoom = '';
 let connectedPassword = '';
 /** This room's project as this computer last had it, from an earlier visit. */
 let earlierCopy: Store | undefined;
+/** Settles once that copy has been looked for. */
+let earlierCopyRead: Promise<void> | undefined;
 
 function connect(mode: Mode, room: string, relay: string, password = ''): void {
   channel?.close();
@@ -675,9 +684,13 @@ function connect(mode: Mode, room: string, relay: string, password = ''): void {
     roomCopyOf = room;
     adoptedState = false;
     earlierCopy = undefined;
-    void loadStore(`room:${room}`).then((copy) => {
+    const reading: Promise<void> = loadStore(`room:${room}`).then((copy) => {
       earlierCopy = copy;
+      if (earlierCopyRead === reading) {
+        earlierCopyRead = undefined;
+      }
     });
+    earlierCopyRead = reading;
     waitForHost(`Getting the project from room ${room}'s host\u2026`);
   }
   try {
@@ -741,7 +754,15 @@ function onSync(message: SyncMessage, reply?: (message: SyncMessage) => void): v
       return;
 
     case 'state': {
+      // The first project from the host is weighed against this computer's
+      // saved copy of the room, so it waits until that has been read.
+      if (role === 'join' && !adoptedState && earlierCopyRead) {
+        void earlierCopyRead.then(() => onSync(message, reply));
+        return;
+      }
       const levelBefore = store.current;
+      // A change waiting for a drag belongs to the project being replaced.
+      deferred = undefined;
       // Someone else's project replaces ours only if nothing has been done
       // here yet — joining is not a reason to lose work — or if they imported
       // a project on purpose.
@@ -931,12 +952,11 @@ window.addEventListener('message', (event: MessageEvent) => {
 
   // Ctrl+S inside the editor, forwarded by the shim.
   if (data?.type === 'blocksEditorSave') {
-    if (role === 'join') {
-      setStatus('The host keeps this project');
-      return;
-    }
     clearTimeout(persistTimer);
-    writeStore().then(() => setStatus('Saved'));
+    writeStore().then(
+      () => setStatus(roomCopyOf ? 'Saved (a copy of the room)' : 'Saved'),
+      (error) => setStatus(`Could not save: ${describe(error)}`)
+    );
     return;
   }
 
@@ -973,10 +993,15 @@ window.addEventListener('message', (event: MessageEvent) => {
       if ((token !== undefined && token !== loadToken) || importWhenReady || waitingForHost) {
         return;
       }
-      if (token === undefined && isBlank(outcome.project.text)) {
-        // Not an Import: a blank project the editor started by itself.
-        putLevelBack();
-        return;
+      if (token === undefined) {
+        const id = outcome.project.header?.id as string | undefined;
+        if (id !== importedProject && isBlank(outcome.project.text)) {
+          // Not an Import: a blank project the editor started by itself.
+          putLevelBack();
+          return;
+        }
+        // An Import: it is the project now, even once its blocks are deleted.
+        importedProject = id;
       }
       // Images, tilemaps and extensions arrive here, never through the
       // workspace, so the shared files are taken from every report.
@@ -1008,15 +1033,18 @@ window.addEventListener('message', (event: MessageEvent) => {
         // else reload, re-save and send theirs back — a reload loop with nobody
         // editing. So while a level is still loading its files are kept here
         // quietly, and only a change made after it has loaded is shared.
-        const loaded = workspaceLoaded || (!reach?.workspace && Date.now() >= settlingUntil);
+        const loaded = workspaceLoaded || (reach?.sameOrigin === false && Date.now() >= settlingUntil);
         if (loaded) {
           editedHere = true;
           channel?.send({ type: 'files', from: ME, files: changed });
         }
       }
       // The blocks come from reading the workspace directly when it can be
-      // reached; this report is only their fallback.
-      if (!reach?.workspace && Date.now() >= settlingUntil) {
+      // reached; this report is only their fallback, for an editor whose
+      // workspace cannot be reached at all. Not one that is still starting:
+      // its first saves are of the project it began with, and taking those
+      // put an empty level over the one that had just arrived, for everyone.
+      if (reach?.sameOrigin === false && Date.now() >= settlingUntil) {
         const blocks = blocksOf(outcome.project);
         if (!(hasNoBlocks(blocks) && !hasNoBlocks(store.levels[store.current] ?? ''))) {
           localChange(blocks);
@@ -1175,7 +1203,7 @@ function inBlankProjectOfItsOwn(blocks: string): boolean {
   try {
     const projectView = view()?.__arcadeOpts?.projectView;
     const header = projectView?.state?.header;
-    if (!header || header.collabLoad !== undefined || countBlocks(blocks) > 1) {
+    if (!header || header.collabLoad !== undefined || header.id === importedProject || countBlocks(blocks) > 1) {
       return false;
     }
     const files: Record<string, { content?: string }> = projectView.editorFile?.epkg?.files ?? {};
@@ -1186,6 +1214,9 @@ function inBlankProjectOfItsOwn(blocks: string): boolean {
     return false;
   }
 }
+
+/** The project the editor imported itself, once its first save has been taken. */
+let importedProject: string | undefined;
 
 /**
  * No blocks and no images: what a new project is. An imported one with only
@@ -1263,20 +1294,36 @@ function pump(): void {
   }
 }
 
-let deferred: string | undefined;
+let deferred: { blocks: string; level: string } | undefined;
 
-/** Puts someone else's blocks into the editor, block by block. */
-function applyRemote(blocks: string): void {
+/**
+ * Puts someone else's blocks into the editor, block by block.
+ *
+ * They are blocks of `level`. If this person has moved to another level since
+ * they arrived — a change waits for a drag to end, and the game can change
+ * level meanwhile — they are kept for that level, not put into this one: that
+ * put one level's blocks over another's, for everyone.
+ */
+function applyRemote(blocks: string, level = store.current): void {
+  if (level !== store.current) {
+    store.levels[level] = blocks;
+    persist();
+    return;
+  }
   // Never while a block is in the user's hand; the drag ends and it lands.
   if (reach && isWorkspaceBusy(reach)) {
     const retry = deferred === undefined;
-    deferred = blocks;
+    deferred = { blocks, level };
     if (retry) {
-      setTimeout(() => {
+      setTimeout(function later() {
+        if (reach && isWorkspaceBusy(reach)) {
+          setTimeout(later, RETRY_MS);
+          return;
+        }
         const pending = deferred;
         deferred = undefined;
-        if (pending !== undefined) {
-          applyRemote(pending);
+        if (pending) {
+          applyRemote(pending.blocks, pending.level);
         }
       }, RETRY_MS);
     }
@@ -1362,6 +1409,12 @@ function restartGame(): void {
  * once the next has replaced it.
  */
 function loadLevel(name: string, options: { broadcast?: boolean } = {}): void {
+  // Not with a block in hand: the canvas would be swapped out from under it,
+  // and the drop would land in the next level. It goes when the block does.
+  if (reach && isWorkspaceBusy(reach)) {
+    setTimeout(() => loadLevel(name, options), RETRY_MS);
+    return;
+  }
   // The level being left keeps its last change, and everyone has it.
   sendUnsentChange();
   if (!(name in store.levels)) {
@@ -1413,6 +1466,7 @@ function showLevelLive(): boolean {
   const readback = readBlocksDirectly(reach, view()) ?? blocks;
   lastPolled = readback;
   agreed = readback;
+  wipeSeen = undefined;
   // The game still running is the level being left: anything it signals in
   // the moment before it restarts is not about this one.
   lastGameSignal = Date.now();
@@ -1714,9 +1768,16 @@ function listenForGame(): void {
         return;
       }
       lastGameSignal = Date.now();
-      const target = named ? named[1] : nextLevel();
+      // "@level 4" means level4. A name with no level behind it is a typo:
+      // making a new, empty level of it — for everyone — helps nobody.
+      const asked = named ? (/^\d+$/.test(named[1]) ? `level${named[1]}` : named[1]) : undefined;
+      const target = asked ?? nextLevel();
       if (!target) {
         setStatus('That was the last level');
+        return;
+      }
+      if (!(target in store.levels)) {
+        setStatus(`The game asked for "${target}", but there is no level by that name`);
         return;
       }
       loadLevel(target);
@@ -1812,12 +1873,30 @@ function replaceProject(levels: Levels, shared: ProjectText): void {
   persist();
   pushStateToEveryone();
   applyLevelMode();
-  if (editorStarted) {
-    loadLevel(store.current, { broadcast: false });
-  } else {
-    project = buildProject();
-  }
+  showNewProject();
   renderSetup();
+}
+
+/**
+ * Shows a project that has just replaced the one on screen: a fresh start or
+ * an import.
+ *
+ * Not through loadLevel, which first saves what is on screen into the current
+ * level — of the new project, by then — and so put the old project's blocks
+ * into the new one, and sent them to everyone. Nothing of the old one is kept
+ * waiting, either.
+ */
+function showNewProject(): void {
+  deferred = undefined;
+  if (!editorStarted) {
+    project = buildProject();
+    return;
+  }
+  renderLevels();
+  if (!showLevelLive()) {
+    showLoading(`Loading ${store.current}\u2026`);
+    reloadLevel();
+  }
 }
 
 /** Replaces everyone's project with ours: an import or a fresh start. */
@@ -1916,6 +1995,9 @@ function waitForHost(text: string): void {
 
 /** A joiner's password did not match the host's. */
 function passwordRefused(room: string): void {
+  // Pressing Apply tries again, even with nothing changed: it may have been
+  // the host's password that was wrong, and they have fixed it.
+  activeConnection = '';
   if (role === 'join') {
     waitForHost(`Wrong password for room ${room}. Open \u2699 Setup and type the password your host gave you.`);
   }
@@ -2131,11 +2213,7 @@ el('setup-new').addEventListener('click', () => {
   editedHere = true;
   persist();
   pushStateToEveryone();
-  if (editorStarted) {
-    loadLevel('level1', { broadcast: false });
-  } else {
-    project = buildProject();
-  }
+  showNewProject();
   renderSetup();
 });
 el('setup-import').addEventListener('click', () => folderInput.click());
