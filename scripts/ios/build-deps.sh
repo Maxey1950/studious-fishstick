@@ -42,7 +42,7 @@ for p in libplist libimobiledevice-glue libusbmuxd libimobiledevice; do
   extra=()
   case "$p" in libplist|libimobiledevice) extra+=(--without-cython) ;; esac
   ./configure --host=aarch64-apple-darwin --prefix="$PREFIX" --enable-static --disable-shared \
-              --disable-silent-rules "${extra[@]}" >"$WORK/$p.configure.log" 2>&1 \
+              --disable-silent-rules ${extra[@]+"${extra[@]}"} >"$WORK/$p.configure.log" 2>&1 \
     || { tail -n 60 "$WORK/$p.configure.log"; exit 1; }
   # Build only the library + headers (skip CLI tools: they are not usable on iOS and are GPL).
   [ -d libcnary ] && make -C libcnary -j"$JOBS" >/dev/null
