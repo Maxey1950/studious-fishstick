@@ -31,7 +31,7 @@ copy_src() { cp -R "$ROOT/third_party/src/$1" "$WORK/$1"; cd "$WORK/$1"; }
 
 echo "=== openssl ($SLICE)"
 copy_src openssl
-./Configure darwin64-arm64-cc no-shared no-tests no-async no-apps no-dso --prefix="$PREFIX" --openssldir="$PREFIX/ssl" >/dev/null
+./Configure darwin64-arm64-cc no-shared no-tests no-async no-dso --prefix="$PREFIX" --openssldir="$PREFIX/ssl" >/dev/null
 make -j"$JOBS" build_libs >/dev/null
 make install_dev >/dev/null
 
