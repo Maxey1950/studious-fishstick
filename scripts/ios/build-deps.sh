@@ -47,6 +47,9 @@ make -C lib -j"$JOBS" >/dev/null
 make -C lib install >/dev/null
 make -C include install >/dev/null
 make install-pkgconfigDATA >/dev/null
+# zlib is provided by the iOS SDK (libz.tbd); give pkg-config a stub so libcurl.pc resolves.
+mkdir -p "$PREFIX/lib/pkgconfig"
+printf 'Name: zlib\nDescription: iOS SDK zlib\nVersion: 1.2.12\nLibs: -lz\n' > "$PREFIX/lib/pkgconfig/zlib.pc"
 
 for p in libplist libimobiledevice-glue libusbmuxd libtatsu libimobiledevice; do
   echo "=== $p ($SLICE)"
