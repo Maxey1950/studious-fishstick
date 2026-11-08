@@ -45,6 +45,7 @@ for p in libplist libimobiledevice-glue libusbmuxd libimobiledevice; do
               --disable-silent-rules "${extra[@]}" >"$WORK/$p.configure.log" 2>&1 \
     || { tail -n 60 "$WORK/$p.configure.log"; exit 1; }
   # Build only the library + headers (skip CLI tools: they are not usable on iOS and are GPL).
+  [ -d libcnary ] && make -C libcnary -j"$JOBS" >/dev/null
   make -C src -j"$JOBS" >/dev/null
   make -C src install >/dev/null
   make -C include install >/dev/null
