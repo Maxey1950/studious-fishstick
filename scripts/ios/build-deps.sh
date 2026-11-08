@@ -70,7 +70,7 @@ done
 
 echo "=== merge"
 LIBS=("$PREFIX"/lib/libplist-2.0.a "$PREFIX"/lib/libimobiledevice-glue-1.0.a "$PREFIX"/lib/libusbmuxd-2.0.a \
-      "$PREFIX"/lib/libimobiledevice-1.0.a "$PREFIX"/lib/libtatsu-1.0.a "$PREFIX"/lib/libcurl.a "$PREFIX"/lib/libssl.a "$PREFIX"/lib/libcrypto.a)
+      "$PREFIX"/lib/libimobiledevice-1.0.a "$PREFIX"/lib/libtatsu.a "$PREFIX"/lib/libcurl.a "$PREFIX"/lib/libssl.a "$PREFIX"/lib/libcrypto.a)
 for l in "${LIBS[@]}"; do [ -f "$l" ] || { echo "missing $l"; ls "$PREFIX/lib"; exit 1; }; done
 /usr/bin/libtool -static -o "$PREFIX/libIDeviceKitNative.a" "${LIBS[@]}"
 
