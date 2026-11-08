@@ -35,7 +35,20 @@ copy_src openssl
 make -j"$JOBS" build_libs >/dev/null
 make install_dev >/dev/null
 
-for p in libplist libimobiledevice-glue libusbmuxd libimobiledevice; do
+echo "=== curl ($SLICE)"
+copy_src curl
+autoreconf -fi >/dev/null 2>&1
+./configure --host=aarch64-apple-darwin --prefix="$PREFIX" --enable-static --disable-shared \
+  --with-openssl="$PREFIX" --without-libpsl --without-brotli --without-zstd --without-nghttp2 \
+  --without-libidn2 --without-libssh2 --without-librtmp --disable-ldap --disable-ldaps \
+  --disable-docs --disable-manual --disable-debug --disable-curldebug \
+  >"$WORK/curl.configure.log" 2>&1 || { tail -n 60 "$WORK/curl.configure.log"; exit 1; }
+make -C lib -j"$JOBS" >/dev/null
+make -C lib install >/dev/null
+make -C include install >/dev/null
+make install-pkgconfigDATA >/dev/null
+
+for p in libplist libimobiledevice-glue libusbmuxd libtatsu libimobiledevice; do
   echo "=== $p ($SLICE)"
   copy_src "$p"
   NOCONFIGURE=1 ./autogen.sh >/dev/null
@@ -48,13 +61,13 @@ for p in libplist libimobiledevice-glue libusbmuxd libimobiledevice; do
   [ -d libcnary ] && make -C libcnary -j"$JOBS" >/dev/null
   make -C src -j"$JOBS" >/dev/null
   make -C src install >/dev/null
-  make -C include install >/dev/null
+  [ -d include ] && make -C include install >/dev/null
   make install-pkgconfigDATA >/dev/null 2>&1 || true
 done
 
 echo "=== merge"
 LIBS=("$PREFIX"/lib/libplist-2.0.a "$PREFIX"/lib/libimobiledevice-glue-1.0.a "$PREFIX"/lib/libusbmuxd-2.0.a \
-      "$PREFIX"/lib/libimobiledevice-1.0.a "$PREFIX"/lib/libssl.a "$PREFIX"/lib/libcrypto.a)
+      "$PREFIX"/lib/libimobiledevice-1.0.a "$PREFIX"/lib/libtatsu-1.0.a "$PREFIX"/lib/libcurl.a "$PREFIX"/lib/libssl.a "$PREFIX"/lib/libcrypto.a)
 for l in "${LIBS[@]}"; do [ -f "$l" ] || { echo "missing $l"; ls "$PREFIX/lib"; exit 1; }; done
 /usr/bin/libtool -static -o "$PREFIX/libIDeviceKitNative.a" "${LIBS[@]}"
 
