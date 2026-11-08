@@ -60,4 +60,16 @@ final class CoreTests: XCTestCase {
     func testLocalProbeMissingSocket() {
         XCTAssertEqual(LocalUSBMuxProbe.probe(path: "/nonexistent/usbmuxd"), .missing("No such file or directory (errno 2)"))
     }
+
+    func testLockdownFraming() throws {
+        let f = try LockdownFraming.frame(["Request": "QueryType"])
+        let n = try LockdownFraming.payloadLength(header: f.prefix(4))
+        XCTAssertEqual(n, f.count - 4)
+        XCTAssertThrowsError(try LockdownFraming.payloadLength(header: Data([0, 0, 0, 0])))
+        XCTAssertThrowsError(try LockdownFraming.payloadLength(header: Data([0xff, 0xff, 0xff, 0xff])))
+    }
+
+    func testInterfacesIncludeNoCrash() {
+        _ = SelfProbe.ipv4Interfaces()
+    }
 }

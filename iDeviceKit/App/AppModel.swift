@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var localProbe: LocalProbeResult?
     @Published private(set) var pairedUDIDs: [String] = []
     @Published var lastError: String?
+    @Published private(set) var selfProbe: [SelfProbeResult] = []
+    @Published private(set) var selfProbeRunning = false
 
     let logger = AppLogger.shared
     private let pairing: PairingStoring
@@ -59,6 +61,14 @@ final class AppModel: ObservableObject {
                 logger.log(.error, "usbmux", "Remote list failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    func runSelfProbe() async {
+        selfProbeRunning = true
+        let r = await SelfProbe.run()
+        selfProbe = r
+        selfProbeRunning = false
+        for x in r { logger.log(.notice, "selfprobe", "\(x.target): tcp=\(x.tcpConnected) lockdown=\(x.lockdownType ?? "no") \(x.detail)") }
     }
 
     func probeLocal() {

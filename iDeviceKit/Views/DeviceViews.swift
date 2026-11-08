@@ -76,6 +76,19 @@ struct USBMuxView: View {
                 Text("On the computer with the iPhone attached: socat TCP-LISTEN:27015,fork,reuseaddr UNIX-CONNECT:/var/run/usbmuxd\nThe connection is unauthenticated and unencrypted — use a trusted LAN or VPN only.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            SwiftUI.Section("Self-connect probe") {
+                Text("Tests whether this phone's own lockdownd (TCP 62078) is reachable from this app, with no VPN. Turn on Wi-Fi sync for this phone from a computer first, and connect to Wi-Fi.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button(model.selfProbeRunning ? "Probing…" : "Run probe") { Task { await model.runSelfProbe() } }
+                    .disabled(model.selfProbeRunning)
+                ForEach(model.selfProbe) { r in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(r.target, systemImage: r.lockdownType != nil ? "checkmark.circle.fill" : (r.tcpConnected ? "exclamationmark.circle" : "xmark.circle"))
+                            .foregroundStyle(r.lockdownType != nil ? Color.green : (r.tcpConnected ? Color.orange : Color.secondary))
+                        Text(r.detail + (r.lockdownType.map { " (\($0))" } ?? "")).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
             SwiftUI.Section("Local socket on iOS") {
                 Text("iOS does not ship a usbmuxd UNIX socket reachable from third-party apps; expect ENOENT or EPERM on a device. See docs/IOS_SANDBOX_FINDINGS.md.")
                     .font(.footnote).foregroundStyle(.secondary)

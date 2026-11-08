@@ -77,7 +77,7 @@ enum LocalUSBMuxProbe {
 
 /// Minimal async TCP client for a *remote* usbmuxd (e.g. `socat TCP-LISTEN:27015,fork UNIX-CONNECT:/var/run/usbmuxd`).
 final class RemoteUSBMuxClient {
-    private let queue = DispatchQueue(label: "usbmux.remote")
+    let queue = DispatchQueue(label: "usbmux.remote")
 
     func listDevices(host: String, port: Int, timeout: TimeInterval = 5) async throws -> [USBMuxDevice] {
         guard !host.trimmingCharacters(in: .whitespaces).isEmpty else { throw TransportError.notConfigured }
@@ -97,7 +97,7 @@ final class RemoteUSBMuxClient {
         return try UsbmuxCodec.parseDeviceList(payload)
     }
 
-    private func connect(_ c: NWConnection) async throws {
+    func connect(_ c: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (k: CheckedContinuation<Void, Error>) in
             let lock = NSLock()
             var done = false
@@ -120,7 +120,7 @@ final class RemoteUSBMuxClient {
         }
     }
 
-    private func send(_ c: NWConnection, _ data: Data) async throws {
+    func send(_ c: NWConnection, _ data: Data) async throws {
         try await withCheckedThrowingContinuation { (k: CheckedContinuation<Void, Error>) in
             c.send(content: data, completion: .contentProcessed { err in
                 if let err = err { k.resume(throwing: TransportError.network(err.localizedDescription)) }
@@ -129,7 +129,7 @@ final class RemoteUSBMuxClient {
         }
     }
 
-    private func receive(_ c: NWConnection, exactly n: Int) async throws -> Data {
+    func receive(_ c: NWConnection, exactly n: Int) async throws -> Data {
         if n == 0 { return Data() }
         return try await withCheckedThrowingContinuation { (k: CheckedContinuation<Data, Error>) in
             c.receive(minimumIncompleteLength: n, maximumLength: n) { data, _, _, err in
