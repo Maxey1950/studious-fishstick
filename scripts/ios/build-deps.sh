@@ -72,7 +72,12 @@ echo "=== merge"
 LIBS=("$PREFIX"/lib/libplist-2.0.a "$PREFIX"/lib/libimobiledevice-glue-1.0.a "$PREFIX"/lib/libusbmuxd-2.0.a \
       "$PREFIX"/lib/libimobiledevice-1.0.a "$PREFIX"/lib/libtatsu.a "$PREFIX"/lib/libcurl.a "$PREFIX"/lib/libssl.a "$PREFIX"/lib/libcrypto.a)
 for l in "${LIBS[@]}"; do [ -f "$l" ] || { echo "missing $l"; ls "$PREFIX/lib"; exit 1; }; done
-/usr/bin/libtool -static -o "$PREFIX/libIDeviceKitNative.a" "${LIBS[@]}"
+# Extract objects with library-prefixed names (glue and libimobiledevice both contain sha512.o).
+M="$WORK/merge"; mkdir -p "$M"
+for l in "${LIBS[@]}"; do
+  b="$(basename "$l" .a)"; mkdir -p "$M/$b"; (cd "$M/$b" && ar x "$l" && for f in *.o; do mv "$f" "${b}__$f"; done)
+done
+/usr/bin/libtool -static -o "$PREFIX/libIDeviceKitNative.a" "$M"/*/*.o
 
 echo "=== verify"
 V="$WORK/verify"; mkdir -p "$V"; cd "$V"; ar x "$PREFIX/lib/libimobiledevice-1.0.a"
@@ -81,5 +86,8 @@ plat="$(vtool -show-build "$obj" | awk '/platform/ {print $2; exit}')"
 echo "archs: $(lipo -archs "$PREFIX/libIDeviceKitNative.a")  platform: $plat"
 [ "$plat" = "$WANT_PLAT" ] || { echo "WRONG PLATFORM (wanted $WANT_PLAT)"; exit 1; }
 lipo -archs "$PREFIX/libIDeviceKitNative.a" | grep -qw arm64
-nm -g "$PREFIX/libIDeviceKitNative.a" 2>/dev/null | grep -q ' T _idevice_new' || { echo "idevice_new missing"; exit 1; }
+nm -g "$PREFIX/libIDeviceKitNative.a" > "$WORK/symbols.txt" 2>/dev/null || true
+for sym in _idevice_new_with_options _plist_new_dict _usbmuxd_get_device_list _SSL_new; do
+  grep -q " T $sym\$" "$WORK/symbols.txt" || { echo "symbol $sym missing"; exit 1; }
+done
 echo "OK $SLICE"
