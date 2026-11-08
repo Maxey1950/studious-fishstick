@@ -1,0 +1,13 @@
+build/
+DerivedData/
+*.xcodeproj
+*.xcuserstate
+third_party/src/
+third_party/out/
+artifacts/
+*.p12
+*.mobileprovision
+*.cer
+*.pem
+*.key
+.DS_Store

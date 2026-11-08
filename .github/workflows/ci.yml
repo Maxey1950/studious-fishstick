@@ -1,0 +1,41 @@
+name: CI (Simulator build + tests)
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+jobs:
+  simulator:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain info
+        run: xcodebuild -version && xcrun --sdk iphonesimulator --show-sdk-version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Pick simulator
+        id: sim
+        run: echo "udid=$(scripts/ci/pick-simulator.sh)" >> "$GITHUB_OUTPUT"
+      - name: Build + test (unsigned, Simulator)
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild test -project iDeviceKit.xcodeproj -scheme iDeviceKit \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath build/DD -resultBundlePath build/tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO | tee build/xcodebuild.log | tail -n 80
+      - name: Verify binary is an arm64/x86 iOS-Simulator Mach-O
+        run: scripts/ci/verify-binary.sh build/DD/Build/Products/Debug-iphonesimulator/iDeviceKit.app simulator
+      - name: Package Simulator app
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --keepParent build/DD/Build/Products/Debug-iphonesimulator/iDeviceKit.app artifacts/iDeviceKit-simulator.app.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-build
+          path: |
+            artifacts/iDeviceKit-simulator.app.zip
+            build/tests.xcresult

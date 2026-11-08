@@ -1,0 +1,40 @@
+name: iDeviceKit
+options:
+  bundleIdPrefix: dev.ideviceKit
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  iDeviceKit:
+    type: application
+    platform: iOS
+    sources: [iDeviceKit]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.ideviceKit.app
+        INFOPLIST_FILE: iDeviceKit/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_PREVIEWS: NO
+  iDeviceKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [iDeviceKitTests]
+    dependencies:
+      - target: iDeviceKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.ideviceKit.tests
+schemes:
+  iDeviceKit:
+    build:
+      targets:
+        iDeviceKit: all
+        iDeviceKitTests: [test]
+    test:
+      targets: [iDeviceKitTests]
