@@ -49,6 +49,9 @@ with the VS Code extension in `../src`.
   Import File) adds the project as a new level after asking, instead of
   replacing the level everyone is working on; its images join the project's.
 - **Copying blocks to and from arcade.makecode.com:** the two sites keep copied
-  blocks apart, so two bookmarks (in Setup) carry them over the clipboard.
+  blocks apart. Copy code from the JavaScript tab there, paste it at the end of
+  the JavaScript tab here, and go back to Blocks: unchanged blocks keep their
+  places. Where bookmarks that run code are allowed, two in Setup carry blocks
+  over the clipboard directly.
 - **Storage:** the browser's IndexedDB. Export / Open backup move a project in and
   out; Import folder takes a folder of `.blocks` files and their assets.

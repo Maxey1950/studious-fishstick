@@ -1712,3 +1712,64 @@ export async function rebuildAssetCode(view: any): Promise<void> {
   assets.needsRebuild = true;
   await projectView.saveProjectAsync();
 }
+
+/**
+ * Puts blocks back where they were before the editor rebuilt the canvas from
+ * code — on coming back from the JavaScript tab, MakeCode lays every block out
+ * afresh. A block that is still the same as one before (same blocks inside,
+ * whatever their ids) goes back to that one's place; new or edited ones stay
+ * where MakeCode put them.
+ */
+export function keepPlaces(reach: EditorReach, view: any, before: string): void {
+  const workspace = refreshWorkspace(view, reach);
+  const Blockly = blocklyOf(view, workspace);
+  if (!workspace || !Blockly?.Xml) {
+    return;
+  }
+  let dom: Element;
+  try {
+    dom = Blockly.utils.xml.textToDom(before);
+  } catch {
+    return;
+  }
+  // Whether a block is greyed out is the editor's to work out afresh, and it
+  // writes it differently after the rebuild: not a change.
+  const key = (element: Element) => {
+    const copy = element.cloneNode(true) as Element;
+    for (const node of [copy, ...Array.from(copy.querySelectorAll('*'))]) {
+      node.removeAttribute('disabled');
+      node.removeAttribute('disabled-reasons');
+    }
+    return canonicalize(copy, true, true);
+  };
+  const old = Array.from(dom.children).filter(
+    (element) => element.tagName.toLowerCase() === 'block' && element.hasAttribute('x')
+  );
+  const placed = new Set<Element>();
+  const unplaced: any[] = [];
+  Blockly.Events.disable();
+  try {
+    for (const block of workspace.getTopBlocks(false)) {
+      const mine = key(topDom(Blockly, block));
+      const place = old.find((element) => !placed.has(element) && key(element) === mine);
+      if (place) {
+        placed.add(place);
+        placeAt(workspace, block, place);
+      } else {
+        unplaced.push(block);
+      }
+    }
+    // An edited block that is the only one of its kind before and after — the
+    // "on start" the code went into — is still that block, in its place.
+    for (const block of unplaced) {
+      const same = (type: string) => (element: Element) => !placed.has(element) && element.getAttribute('type') === type;
+      const candidates = old.filter(same(block.type));
+      if (candidates.length === 1 && unplaced.filter((other) => other.type === block.type).length === 1) {
+        placed.add(candidates[0]);
+        placeAt(workspace, block, candidates[0]);
+      }
+    }
+  } finally {
+    Blockly.Events.enable();
+  }
+}

@@ -40,6 +40,7 @@ import {
   highlightBlocks,
   isWorkspaceBusy,
   probeEditor,
+  keepPlaces,
   readBlocksDirectly,
   rebuildAssetCode,
   replaceBlocks,
@@ -348,6 +349,7 @@ function peerChannel(roomName: string, hosting: boolean, roomPassword: string): 
   let isHost = false;
   let closed = false;
   let retryTimer: number | undefined;
+  let serverTimer: number | undefined;
 
   // Heartbeat. A computer that disappears without saying goodbye — a closed
   // lid, dropped Wi-Fi, a crash — leaves its links looking open for a long
@@ -381,10 +383,12 @@ function peerChannel(roomName: string, hosting: boolean, roomPassword: string): 
     }
     const others = members.size;
     if (isHost) {
+      // Without the server, nobody new can find the room, but nobody in it notices.
+      const offServer = peer?.disconnected ? ' (reconnecting so new friends can join)' : '';
       setConn(
         others
-          ? `Room ${room}: hosting, ${others} other${others === 1 ? '' : 's'} connected`
-          : `Room ${room}: waiting for friends to join`,
+          ? `Room ${room}: hosting, ${others} other${others === 1 ? '' : 's'} connected${offServer}`
+          : `Room ${room}: waiting for friends to join${offServer}`,
         others ? 'on' : 'wait'
       );
     } else {
@@ -508,6 +512,20 @@ function peerChannel(roomName: string, hosting: boolean, roomPassword: string): 
     });
   };
 
+  /**
+   * Lost the introduction server while the room carries on: try it again in
+   * a while, as often as it takes, without touching anyone's link.
+   */
+  function serverLost(lost: Peer): void {
+    clearTimeout(serverTimer);
+    report();
+    serverTimer = setTimeout(() => {
+      if (peer === lost && !lost.destroyed && lost.disconnected && !closed) {
+        lost.reconnect();
+      }
+    }, 5000 + Math.random() * 5000) as unknown as number;
+  }
+
   /** One step of the password handshake (see above), on either side. */
   function authenticate(
     link: DataConnection,
@@ -588,6 +606,17 @@ function peerChannel(roomName: string, hosting: boolean, roomPassword: string): 
       if (peer !== candidate) {
         return;
       }
+      if (isHost && !candidate.destroyed) {
+        // Already hosting, and this is the introduction server, not the
+        // friends: their links go straight between the computers and are
+        // still up. Reconnecting to the server often finds the room's code
+        // still held by the connection that just dropped — "taken" — and
+        // treating that like any other failure closed every link and threw
+        // everyone out. Keep the room; get back to the server in the
+        // background, which only matters for someone new joining.
+        serverLost(candidate);
+        return;
+      }
       if (error.type === 'unavailable-id') {
         // Someone else is hosting this code — or this page was just reloaded
         // and the server still holds the old one for a few seconds.
@@ -609,7 +638,9 @@ function peerChannel(roomName: string, hosting: boolean, roomPassword: string): 
     peer = guest;
     report();
     guest.on('open', () => {
-      if (peer === guest) {
+      // Also fired on getting back to the server after losing it, when the
+      // link to the host is still up: a second one would double everything.
+      if (peer === guest && !links.size) {
         wire(guest.connect(hostId, { reliable: true }));
       }
     });
@@ -620,6 +651,12 @@ function peerChannel(roomName: string, hosting: boolean, roomPassword: string): 
     });
     guest.on('error', (error: { type?: string }) => {
       if (peer !== guest) {
+        return;
+      }
+      // Already connected to the host: the server is not needed for that, and
+      // dropping a working link over it threw people out for nothing.
+      if (members.size && !guest.destroyed) {
+        serverLost(guest);
         return;
       }
       // Nobody is hosting this code yet, or the host has just left.
@@ -655,6 +692,7 @@ function peerChannel(roomName: string, hosting: boolean, roomPassword: string): 
     close: () => {
       closed = true;
       clearTimeout(retryTimer);
+      clearTimeout(serverTimer);
       clearInterval(heartbeat);
       window.removeEventListener('pagehide', leave);
       reset();
@@ -1425,6 +1463,14 @@ function readWorkspace(): void {
   if (!reach || Date.now() < settlingUntil || importWhenReady || waitingForHost || isWorkspaceBusy(reach)) {
     return;
   }
+  // Back from the JavaScript tab: MakeCode has turned the code into blocks and
+  // laid every one of them out afresh. Unchanged ones go back to their places
+  // before that is read and sent, or everyone's blocks would jump around.
+  const inBlocks = isBlocksTabActive();
+  if (inBlocks && wasInCode && lastPolled && workspaceLoaded) {
+    keepPlaces(reach, view(), lastPolled);
+  }
+  wasInCode = !inBlocks;
   const blocks = readBlocksDirectly(reach, view());
   // Reading finds the live workspace, which a load replaces.
   listenToWorkspace();
@@ -1525,6 +1571,16 @@ function putLevelBack(): void {
   showLoading(`Putting ${store.current} back\u2026`);
   setStatus('The editor started a blank project by itself \u2014 your level was put back');
   reloadLevel();
+}
+
+let wasInCode = false;
+
+function isBlocksTabActive(): boolean {
+  try {
+    return view()?.__arcadeOpts?.projectView?.isBlocksActive?.() !== false;
+  } catch {
+    return true;
+  }
 }
 
 /** A drop to a third of the blocks or fewer, from a level that had some. */
