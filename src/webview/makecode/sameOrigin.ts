@@ -1696,3 +1696,19 @@ export async function runLatestGame(view: any): Promise<boolean> {
   await projectView.runSimulator({});
   return true;
 }
+
+/**
+ * Has the editor write out its image code (images.g.ts and the like) from its
+ * image store, as it does after the image editor closes. Images added from
+ * outside are in the store but not yet in that code, and the game is compiled
+ * from the code.
+ */
+export async function rebuildAssetCode(view: any): Promise<void> {
+  const projectView = view?.__arcadeOpts?.projectView;
+  const assets = view?.pxt?.react?.getTilemapProject?.();
+  if (!assets || typeof projectView?.saveProjectAsync !== 'function') {
+    return;
+  }
+  assets.needsRebuild = true;
+  await projectView.saveProjectAsync();
+}

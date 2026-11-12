@@ -41,6 +41,7 @@ import {
   isWorkspaceBusy,
   probeEditor,
   readBlocksDirectly,
+  rebuildAssetCode,
   replaceBlocks,
   runLatestGame,
   type EditorReach,
@@ -241,6 +242,8 @@ interface Channel {
   label: string;
   send(message: SyncMessage): void;
   close(): void;
+  /** A room's password changed: keep the room, and ask everyone again. */
+  setPassword?(password: string): void;
 }
 
 let channel: Channel | undefined;
@@ -329,7 +332,8 @@ function peerRoom(name: string): string {
  * drops it if it takes too long; a joiner believes nothing from a host that
  * could not answer. Without a password, both sides use an empty one.
  */
-function peerChannel(roomName: string, hosting: boolean, password: string): Channel {
+function peerChannel(roomName: string, hosting: boolean, roomPassword: string): Channel {
+  let password = roomPassword;
   const room = peerRoom(roomName);
   const hostId = `arcadecollab-${room}`;
   const links = new Set<DataConnection>();
@@ -654,6 +658,22 @@ function peerChannel(roomName: string, hosting: boolean, password: string): Chan
       clearInterval(heartbeat);
       window.removeEventListener('pagehide', leave);
       reset();
+    },
+    // Letting go of the room's address to take it again with the new password
+    // can leave it "taken" for a long while on the free server, and nobody
+    // can join meanwhile. So the address is kept, and everyone in the room is
+    // asked again: each is reconnected, and has to know the new password.
+    setPassword: (next) => {
+      password = next;
+      if (isHost) {
+        for (const link of Array.from(links)) {
+          drop(link);
+        }
+        report();
+      } else {
+        reset();
+        retry(0);
+      }
     },
   };
 }
@@ -1086,7 +1106,266 @@ function probeOnce(): void {
   }
   if (reach.sameOrigin && reach.workspace) {
     startPolling();
+    guardImports();
+    watchEditorLoads();
+    bridgeClipboard();
   }
+}
+
+/**
+ * Lets blocks be copied between arcade.makecode.com and here.
+ *
+ * MakeCode keeps copied blocks in the website's own storage, not on the
+ * clipboard, and each website has its own: blocks copied on
+ * arcade.makecode.com were simply not there to paste. So copied blocks are
+ * carried on the real clipboard as well, as text marked as blocks:
+ *
+ *   - copying here puts them on the clipboard too;
+ *   - clicking into the editor here looks at the clipboard, and blocks found
+ *     there are what Ctrl+V pastes.
+ *
+ * On arcade.makecode.com, which knows nothing of this, a bookmark does the
+ * same two things (see the Setup screen).
+ */
+const BLOCKS_MARK = 'arcade-collab-blocks:';
+let clipboardBridged = false;
+let lastClipboardLook = 0;
+
+function bridgeClipboard(): void {
+  const editorWindow = view();
+  if (clipboardBridged || !editorWindow) {
+    return;
+  }
+  clipboardBridged = true;
+  editorWindow.addEventListener(
+    'keydown',
+    (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && (event.key === 'c' || event.key === 'C')) {
+        // Once MakeCode has stored them, which is not straight away.
+        const before = readCopiedBlocks();
+        let waited = 0;
+        const check = (): void => {
+          const copied = readCopiedBlocks();
+          if (copied && copied !== before) {
+            editorWindow.navigator.clipboard?.writeText(BLOCKS_MARK + copied).catch(() => undefined);
+          } else if ((waited += 50) < 1500) {
+            setTimeout(check, 50);
+          }
+        };
+        setTimeout(check, 0);
+      }
+    },
+    // Before MakeCode's own handling, which stops the keystroke going further.
+    true
+  );
+  editorWindow.addEventListener('pointerdown', () => void takeBlocksFromClipboard(), true);
+  editorWindow.addEventListener('focus', () => void takeBlocksFromClipboard());
+}
+
+/** Where MakeCode keeps copied blocks, in this website's storage. */
+function copiedBlocksKey(): string {
+  try {
+    return Object.keys(localStorage).find((key) => key.endsWith('/copyData')) ?? 'arcade/copyData';
+  } catch {
+    return 'arcade/copyData';
+  }
+}
+
+function readCopiedBlocks(): string | undefined {
+  try {
+    return localStorage.getItem(copiedBlocksKey()) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Blocks on the clipboard, copied elsewhere, become what Ctrl+V pastes here. */
+async function takeBlocksFromClipboard(retry = true): Promise<void> {
+  if (Date.now() - lastClipboardLook < 1000) {
+    return;
+  }
+  let text: string;
+  try {
+    text = await view().navigator.clipboard.readText();
+  } catch {
+    // The click comes a moment before the editor has the focus a clipboard
+    // read needs, so try once more just after. Past that: no permission, or
+    // the page is in a frame that does not allow it.
+    if (retry) {
+      setTimeout(() => void takeBlocksFromClipboard(false), 200);
+    }
+    return;
+  }
+  lastClipboardLook = Date.now();
+  const copied = text.startsWith(BLOCKS_MARK) ? text.slice(BLOCKS_MARK.length) : text;
+  const data = safeJson(copied) as { version?: unknown; data?: { paster?: unknown } };
+  if (!data.version || !data.data?.paster || copied === readCopiedBlocks()) {
+    return;
+  }
+  try {
+    localStorage.setItem(copiedBlocksKey(), copied);
+    setStatus('Blocks copied from MakeCode \u2014 press Ctrl+V to paste them');
+  } catch {
+    // Storage full or blocked: Ctrl+V pastes what it had.
+  }
+}
+
+/**
+ * Notices MakeCode loading a project by itself — after adding an extension,
+ * or when it starts over — and keeps the level right through it.
+ *
+ * Nothing told the page it was happening, so it went on reading the canvas
+ * while MakeCode cleared and rebuilt it, and a half-empty canvas could be
+ * sent to everyone. And MakeCode rebuilds from its own saved copy of the
+ * blocks, which does not have changes that came from other people since its
+ * last save (those go onto the canvas without telling it), so they vanished
+ * too. Now the canvas is left alone while it loads, and afterwards it is put
+ * back to the level as it should be, if it is not already.
+ */
+function watchEditorLoads(): void {
+  const projectView = view()?.__arcadeOpts?.projectView;
+  if (!projectView || projectView.__collabLoads || typeof projectView.loadHeaderAsync !== 'function') {
+    return;
+  }
+  const loadHeaderAsync = projectView.loadHeaderAsync;
+  projectView.loadHeaderAsync = function (...args: unknown[]) {
+    editorLoading();
+    const loading = loadHeaderAsync.apply(this, args);
+    Promise.resolve(loading).then(
+      () => setTimeout(afterEditorLoad, 500),
+      () => setTimeout(afterEditorLoad, 500)
+    );
+    return loading;
+  };
+  projectView.__collabLoads = true;
+}
+
+function afterEditorLoad(tries = 0): void {
+  if (!reach || importWhenReady) {
+    return;
+  }
+  const blocks = readBlocksDirectly(reach, view());
+  if (!blocks) {
+    if (tries < 20) {
+      setTimeout(() => afterEditorLoad(tries + 1), 250);
+    }
+    return;
+  }
+  // A blank project of MakeCode's own: put the level back (see putLevelBack).
+  if (inBlankProjectOfItsOwn(blocks)) {
+    workspaceLoaded = true;
+    settlingUntil = 0;
+    putLevelBack();
+    return;
+  }
+  const level = store.levels[store.current] ?? EMPTY_LEVEL;
+  if (!sameBlocks(blocks, level)) {
+    applyBlocksDirectly(reach, view(), level);
+  }
+  const readback = readBlocksDirectly(reach, view()) ?? level;
+  lastPolled = readback;
+  agreed = readback;
+  wipeSeen = undefined;
+  workspaceLoaded = true;
+  settlingUntil = 0;
+  hideLoading();
+}
+
+/**
+ * Keeps MakeCode's own Import from overwriting the level.
+ *
+ * Pasting or dropping a project picture (the camera button saves one), or
+ * opening a project file, makes MakeCode replace the project on screen with
+ * the one in the file. On arcade.makecode.com that is a new project and the
+ * old one is still in the list; here it replaced the level everyone was
+ * working on, with whatever older code the picture held — for everyone.
+ *
+ * Every way in ends at importHex, so that is where it is caught: the project
+ * is added as a new level instead, once asked. A picture of a few blocks is
+ * not a project and never gets here; MakeCode adds those blocks itself, which
+ * is harmless. An extension file is not a project either, and goes through.
+ */
+function guardImports(): void {
+  const projectView = view()?.__arcadeOpts?.projectView;
+  if (!projectView || projectView.__collabImports || typeof projectView.importHex !== 'function') {
+    return;
+  }
+  const importHex = projectView.importHex;
+  projectView.importHex = function (data: any, options: any) {
+    if (options?.extension) {
+      return importHex.call(this, data, options);
+    }
+    let files: ProjectText | undefined;
+    try {
+      files = typeof data?.source === 'string' ? JSON.parse(data.source) : data?.source;
+    } catch {
+      files = undefined;
+    }
+    if (!files || typeof files['main.blocks'] !== 'string') {
+      setStatus('That file has no blocks in it, so it was not opened \u2014 only block projects can be added as a level');
+      return;
+    }
+    void addImportedLevel(String(data?.meta?.name ?? 'imported project'), files);
+  };
+  projectView.__collabImports = true;
+}
+
+/** Adds an imported MakeCode project as a level of its own; see guardImports. */
+async function addImportedLevel(name: string, files: ProjectText): Promise<void> {
+  if (
+    !window.confirm(
+      `This holds a whole MakeCode project ("${name}"). Add it as a new level?\n\n` +
+        'Your code stays exactly as it is. Cancel to leave everything alone.'
+    )
+  ) {
+    return;
+  }
+  let n = levelNames().length + 1;
+  while (`level${n}` in store.levels) {
+    n++;
+  }
+  const level = `level${n}`;
+
+  // Its images join ours. One with the same name as one of ours keeps ours:
+  // replacing it would change the sprites in every other level.
+  const added: ProjectText = {};
+  let clashes = 0;
+  for (const [file, text] of Object.entries(files)) {
+    if (!file.endsWith('.jres')) {
+      continue;
+    }
+    const theirs = safeJson(text);
+    const ours = safeJson(store.shared[file] ?? '');
+    const fresh = Object.keys(theirs).filter((key) => key !== '*' && !(key in ours));
+    clashes += Object.keys(theirs).filter((key) => key !== '*' && key in ours).length;
+    if (fresh.length) {
+      added[file] = JSON.stringify({ ...theirs, ...ours }, null, 4);
+    }
+  }
+  if (Object.keys(added).length) {
+    const config = safeJson(store.shared['pxt.json'] ?? '{}') as { files?: string[] };
+    config.files = Array.from(new Set([...(config.files ?? []), ...Object.keys(added)]));
+    added['pxt.json'] = JSON.stringify(config, null, 4);
+    store.shared = { ...store.shared, ...added };
+    if ((await applyFilesLive(view(), added)) === 'applied') {
+      await rebuildAssetCode(view()).catch(() => undefined);
+    }
+    channel?.send({ type: 'files', from: ME, files: added });
+  }
+
+  store.levels[level] = files['main.blocks'];
+  if (!store.levelsEnabled) {
+    store.levelsEnabled = true;
+    channel?.send({ type: 'settings', from: ME, levelsEnabled: true });
+  }
+  persist();
+  applyLevelMode();
+  channel?.send({ type: 'blocks', from: ME, level, xml: store.levels[level] });
+  loadLevel(level);
+  setStatus(
+    `Added "${name}" as ${level}` +
+      (clashes ? ` \u2014 ${clashes} of its images had the same names as yours, and yours were kept` : '')
+  );
 }
 
 function watchForWorkspace(): void {
@@ -2221,6 +2500,21 @@ el('setup-backup').addEventListener('click', () => backupInput.click());
 
 el('open-setup').addEventListener('click', openSetup);
 
+// The bookmarks that carry copied blocks to and from arcade.makecode.com
+// (see bridgeClipboard). They run there, so they are self-contained.
+const BOOKMARKS: Record<string, string> = {
+  'bm-copy': `(()=>{const k=Object.keys(localStorage).find(k=>k.endsWith('/copyData'));const d=k&&localStorage.getItem(k);if(!d){alert('In MakeCode, click a block and press Ctrl+C first.');return}const t='${BLOCKS_MARK}'+d;navigator.clipboard.writeText(t).then(()=>alert('Copied for Arcade Collab. Click in the Arcade Collab editor and press Ctrl+V.'),()=>prompt('Press Ctrl+C to copy this, then go to Arcade Collab:',t))})()`,
+  'bm-paste': `(()=>{navigator.clipboard.readText().then(t=>{const m='${BLOCKS_MARK}';if(!t.startsWith(m)){alert('First click a block in Arcade Collab and press Ctrl+C.');return}const k=Object.keys(localStorage).find(k=>k.endsWith('/copyData'))||'arcade/copyData';localStorage.setItem(k,t.slice(m.length));alert('Ready. Click in the MakeCode editor and press Ctrl+V.')},()=>alert('Allow MakeCode to see the clipboard, then try again.'))})()`,
+};
+for (const [id, code] of Object.entries(BOOKMARKS)) {
+  const link = el<HTMLAnchorElement>(id);
+  link.href = `javascript:${encodeURIComponent(code)}`;
+  link.addEventListener('click', (event) => {
+    event.preventDefault();
+    window.alert('Drag this button onto your bookmarks bar, then use it on arcade.makecode.com.');
+  });
+}
+
 startButton.addEventListener('click', () => {
   const mode = selectedMode();
 
@@ -2268,7 +2562,13 @@ startButton.addEventListener('click', () => {
   // Kept only for this visit: a shared school computer should not remember it.
   const password = inRoom ? passwordInput.value : '';
   const key = `${mode}|${room}|${mode === 'relay' ? relay : ''}|${sha256(password)}`;
-  if (!channel || key !== activeConnection) {
+  const samePlace = `${mode}|${room}|${mode === 'relay' ? relay : ''}|`;
+  if (channel?.setPassword && activeConnection.startsWith(samePlace) && key !== activeConnection) {
+    // Only the password changed.
+    channel.setPassword(password);
+    connectedPassword = password;
+    activeConnection = key;
+  } else if (!channel || key !== activeConnection) {
     connect(mode, room, relay, password);
     activeConnection = key;
   }

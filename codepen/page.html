@@ -96,6 +96,10 @@
     background: #7b5cff !important; border-color: #9a82ff !important;
   }
   .primary:hover { background: #8d72ff !important; }
+  .bookmarklet {
+    display: inline-block; padding: 6px 12px; border-radius: 6px; cursor: grab;
+    background: #3c3c58; border: 1px dashed #9a82ff; color: #f0f0f6; text-decoration: none; font-weight: 600;
+  }
   #take-over { width: auto; padding: 10px 22px !important; }
   #take-over-hint { max-width: 420px; font: 400 14px/1.5 system-ui, sans-serif; }
 </style>
@@ -114,7 +118,7 @@
     <span id="status"></span>
   </div>
   <div id="stage">
-    <iframe id="editor" allow="usb; autoplay; camera; microphone"></iframe>
+    <iframe id="editor" allow="usb; autoplay; camera; microphone; clipboard-read; clipboard-write"></iframe>
     <div id="loading" hidden>
       <div id="loading-text">Loading&hellip;</div>
       <button id="take-over" class="primary" hidden title="Carry on with this computer's copy of the project; the others join you">Host from here</button>
@@ -175,6 +179,17 @@
         <input id="setup-password" type="password" autocomplete="off" placeholder="No password">
       </label>
       <p class="hint" id="room-hint"></p>
+    </section>
+
+    <section>
+      <h2><span class="num">4</span> Copying blocks from arcade.makecode.com</h2>
+      <p class="hint">The two websites cannot share copied blocks by themselves. Drag these two buttons onto your bookmarks bar, once:</p>
+      <div class="row">
+        <a id="bm-copy" class="bookmarklet" href="#">Copy for Arcade Collab</a>
+        <a id="bm-paste" class="bookmarklet" href="#">Paste from Arcade Collab</a>
+      </div>
+      <p class="hint"><b>Into Arcade Collab:</b> on arcade.makecode.com click a block, press Ctrl+C, then click the <b>Copy for Arcade Collab</b> bookmark. Here, click in the editor and press Ctrl+V.</p>
+      <p class="hint"><b>The other way:</b> press Ctrl+C on blocks here, then on arcade.makecode.com click the <b>Paste from Arcade Collab</b> bookmark and press Ctrl+V.</p>
     </section>
 
     <button id="setup-start" class="primary">Start editing &rarr;</button>
